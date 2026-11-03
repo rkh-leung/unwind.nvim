@@ -1,0 +1,13 @@
+thread 'main' panicked at src/main.rs:45:12:
+explicit panic
+stack backtrace:
+   0: rust_begin_unwind
+             at /rustc/07dca489ac2d933c78d3c5158e3f43beef347bd7/library/std/src/panicking.rs:645:5
+   1: core::panicking::panic_fmt
+             at /rustc/07dca489ac2d933c78d3c5158e3f43beef347bd7/library/core/src/panicking.rs:72:14
+   2: my_app::process_order
+             at src/order.rs:88:9
+   3: my_app::main
+             at /path/to/main.rs:45
+error: aborting due to 1 previous error
+  --> src/main.rs:45:12

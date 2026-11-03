@@ -1,0 +1,6 @@
+TypeError: Cannot read properties of undefined (reading 'token')
+    at AuthService.validateSession (/var/task/src/auth/session.js:45:12)
+    at verifyToken (/app/src/middleware/verify.js:18:7)
+    at /app/src/server.js:80:5
+    at Layer.handle [as handle_request] (/app/node_modules/express/lib/router/layer.js:95:5)
+    at at /path/to/file.js:45:12
