@@ -181,7 +181,23 @@ local matchers = {
     return nil
   end,
 
-  -- 7. Generic fallback:
+  -- 7. Ruby style:
+  -- 'from /path/to/file.rb:12:in `method_name'\'' or '/path/to/file.rb:12:in `method_name\': error msg'
+  -- or with single quotes: 'from /path/to/file.rb:12:in '\''method_name\'\''
+  function(line)
+    local file, lnum, method = line:match("([%w_%-./\\]+%.%w+):(%d+):in%s+[`'](.-)['`]")
+    if file and lnum then
+      return {
+        file = file,
+        line = tonumber(lnum),
+        col = 1,
+        method = method or "",
+      }
+    end
+    return nil
+  end,
+
+  -- 8. Generic fallback:
   -- "([%w_%-./\\]+%.%w+):(%d+):?(%d*)"
   function(line)
     local file, lnum, col = line:match("([%w_%-./\\]+%.%w+):(%d+):?(%d*)")

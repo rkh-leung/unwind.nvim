@@ -18,8 +18,8 @@ M.state = {
 --- Default configuration
 M.config = {
   keymaps = {
-    menu = "<leader>uw",
-    clipboard = "<leader>uc",
+    menu = "<leader>w",
+    clipboard = "<leader>c",
     next = "]u",
     prev = "[u",
   },
