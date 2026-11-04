@@ -1,0 +1,6 @@
+System.NullReferenceException: Object reference not set to an instance of an object.
+   at RaygunApp.Controllers.CheckoutController.ProcessPayment(OrderRequest request) in /app/src/Controllers/CheckoutController.cs:line 104
+   at RaygunApp.Services.PaymentService.ExecuteTransaction(PaymentDetails details) in /app/src/Services/PaymentService.cs:line 42
+   at RaygunApp.Handlers.OrderHandler.Handle(OrderCommand cmd) in C:\workspace\src\Handlers\OrderHandler.cs:line 78
+   at com.example.service.UserService.findUser(UserService.java:55)
+   at com.example.service.AuthFilter.doFilter(AuthFilter.java:120)
