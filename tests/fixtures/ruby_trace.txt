@@ -1,0 +1,5 @@
+app/controllers/users_controller.rb:25:in `show': undefined method `email' for nil:NilClass (NoMethodError)
+	from /var/task/app/services/user_finder.rb:42:in `find_user'
+	from /app/lib/auth/authenticator.rb:18:in 'authenticate!'
+	from config/initializers/warden.rb:10:in '<main>'
+	from /path/to/script.rb:5:in '<top (required)>'
