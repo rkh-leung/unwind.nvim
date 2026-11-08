@@ -5,6 +5,8 @@ local M = {}
 
 local active_win = nil
 local active_buf = nil
+local input_win = nil
+local input_buf = nil
 
 --- Close the floating menu if open
 function M.close()
@@ -13,6 +15,15 @@ function M.close()
   end
   active_win = nil
   active_buf = nil
+end
+
+--- Close the input floating window if open
+function M.close_input()
+  if input_win and vim.api.nvim_win_is_valid(input_win) then
+    vim.api.nvim_win_close(input_win, true)
+  end
+  input_win = nil
+  input_buf = nil
 end
 
 --- Toggles or opens the floating menu displaying unique files
@@ -138,6 +149,93 @@ function M.open(files, on_select)
       end
       if active_buf == buf then
         active_buf = nil
+      end
+    end,
+  })
+end
+
+--- Opens an interactive floating scratch buffer where the user can paste or type a stacktrace
+---@param on_submit fun(text: string) Callback when the user submits the stacktrace
+function M.open_input(on_submit)
+  -- If already open, close it (toggle)
+  if input_win and vim.api.nvim_win_is_valid(input_win) then
+    M.close_input()
+    return
+  end
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  input_buf = buf
+
+  vim.bo[buf].buftype = "nofile"
+  vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].swapfile = false
+  vim.bo[buf].buflisted = false
+
+  local editor_width = vim.o.columns
+  local editor_height = vim.o.lines
+  local win_width = math.min(math.max(math.floor(editor_width * 0.8), 70), editor_width - 4)
+  local win_height = math.min(math.max(math.floor(editor_height * 0.6), 15), editor_height - 4)
+  local row = math.floor((editor_height - win_height) / 2)
+  local col = math.floor((editor_width - win_width) / 2)
+
+  local win_opts = {
+    relative = "editor",
+    width = win_width,
+    height = win_height,
+    row = row,
+    col = col,
+    style = "minimal",
+    border = "rounded",
+    title = " Unwind: Paste Stacktrace (<C-s> / :w to submit, q / <Esc> in normal mode to cancel) ",
+    title_pos = "center",
+  }
+
+  local win = vim.api.nvim_open_win(buf, true, win_opts)
+  input_win = win
+
+  local function submit()
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local text = table.concat(lines, "\n")
+    M.close_input()
+    if on_submit then
+      on_submit(text)
+    end
+  end
+
+  local keymap_opts = { noremap = true, silent = true, buffer = buf }
+
+  -- Normal and Insert mode keymaps to submit
+  vim.keymap.set("n", "<C-s>", submit, keymap_opts)
+  vim.keymap.set("i", "<C-s>", submit, keymap_opts)
+
+  -- Normal mode 'q' or '<Esc>' to cancel
+  vim.keymap.set("n", "q", function()
+    M.close_input()
+  end, keymap_opts)
+  vim.keymap.set("n", "<Esc>", function()
+    M.close_input()
+  end, keymap_opts)
+
+  -- Intercept :w and :write to submit instead of failing with E32
+  vim.api.nvim_buf_create_user_command(buf, "W", submit, { desc = "Submit stacktrace" })
+  vim.api.nvim_buf_create_user_command(buf, "Write", submit, { desc = "Submit stacktrace" })
+
+  vim.api.nvim_create_autocmd("BufWriteCmd", {
+    buffer = buf,
+    callback = function()
+      submit()
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("BufWipeout", {
+    buffer = buf,
+    once = true,
+    callback = function()
+      if input_win == win then
+        input_win = nil
+      end
+      if input_buf == buf then
+        input_buf = nil
       end
     end,
   })

@@ -63,6 +63,9 @@ unwind.nvim/
 When Neovim starts up or when the plugin is loaded via `packadd` or a plugin manager, `plugin/unwind.lua` is executed:
 - Prevents redundant execution using `vim.g.loaded_unwind`.
 - Registers user commands:
+  - `:Unwind`: Ingests stacktrace from an optional file argument or opens an interactive paste scratchpad.
+  - `:UnwindFile`: Ingests stacktrace from a specified file path.
+  - `:UnwindInput`: Opens an interactive scratchpad window to paste/type a stacktrace.
   - `:UnwindClipboard`: Ingests trace from the `+` register.
   - `:UnwindSelection`: Ingests visually selected text using `range = true`.
   - `:UnwindMenu`: Toggles the Harpoon-style file switching float.
