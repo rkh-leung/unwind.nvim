@@ -24,6 +24,59 @@ There are zero external binary dependencies (no Rust CLI, no external JSON parsi
 
 ---
 
+## How to Use & Workflow Guide
+
+`unwind.nvim` is designed to be used directly from your codebase directory so that paths in stacktraces are automatically mapped to your local source files.
+
+### 1. Launch Neovim in your project root
+
+Navigate to your code repository and launch Neovim with the repository as the root directory:
+
+```bash
+cd /path/to/my-project
+nvim .
+```
+
+Running `nvim .` ensures Neovim's current working directory (`vim.fn.getcwd()`) points to your codebase. `unwind.nvim` uses this working directory to automatically strip container and build prefixes (e.g. `/app/`, `/var/task/`, `C:\workspace\`) and resolve files in the stacktrace to local project files.
+
+### 2. Provide the stacktrace
+
+You can provide a crash stacktrace using any of four flexible methods:
+
+1. **Directly from system clipboard** (Fastest):
+   - Copy the stacktrace to your system clipboard from your terminal, CI log, or browser.
+   - In Neovim, press `<leader>c` (or run `:UnwindClipboard`).
+2. **From an interactive scratchpad window** (Great for remote SSH / tmux sessions without clipboard support):
+   - Run `:UnwindInput` or `:Unwind`.
+   - A floating input window will appear. Paste or type your stacktrace into the buffer.
+   - Press `<C-s>` or `:w<CR>` to submit, or `q` / `<Esc>` in normal mode to cancel.
+3. **From a file on disk**:
+   - Run `:UnwindFile /path/to/trace.log` (or `:Unwind path/to/trace.log`). Path completion is enabled via `<Tab>`.
+4. **From a visual selection in an open buffer**:
+   - Highlight the lines containing the stacktrace in visual mode (`V`).
+   - Run `:UnwindSelection`.
+
+### 3. Navigate the codebase with the stacktrace overlay
+
+Once ingested:
+- **Instant Overlay**: `unwind.nvim` automatically opens the file of the first (primary) fault frame, moves the cursor to the exact line and column, and overlays an inline diagnostic banner (`virt_lines`) right above the fault line:
+  ```text
+    ✕ [CALL STACK FAULT] Frame #1: ProcessPayment()
+      ↳ src/services/checkout.lua:104
+  ```
+- **Cycle Through Frames**:
+  - `]u` (or `:UnwindNext`): Jump to the next stack frame down the call stack.
+  - `[u` (or `:UnwindPrev`): Jump to the previous stack frame up the call stack.
+- **Harpoon-Style File Menu**:
+  - Press `<leader>w` (or run `:UnwindMenu`) to open the floating menu showing unique implicated files in occurrence order.
+  - Press `1` through `9` to jump directly to slot 1–9.
+  - Press `<CR>` to jump to the selected file at its primary fault line.
+  - Press `q` or `<Esc>` to dismiss the menu.
+- **Clear Overlays**:
+  - Run `:UnwindClear` whenever you want to dismiss all active decorations and reset state.
+
+---
+
 ## Installation
 
 ### Using native Vim packages (`vim.pack` / `packpath`)
@@ -81,6 +134,9 @@ require("unwind").setup({
 
 | Command | Description |
 |---|---|
+| `:Unwind [path]` | Ingests stacktrace from file `[path]` or opens interactive paste modal |
+| `:UnwindFile <path>` | Ingests stacktrace from specified file |
+| `:UnwindInput` | Opens interactive floating scratchpad to paste/type a stacktrace |
 | `:UnwindClipboard` | Ingests stacktrace from clipboard `+` register |
 | `:UnwindSelection` | Ingests stacktrace from visually highlighted range |
 | `:UnwindMenu` | Toggles the Harpoon-style floating distinct files menu |

@@ -102,4 +102,41 @@ assert_true(#collected.files > 0, "collected files should not be empty")
 assert_true(collected.files[1].file:find("CheckoutController%.cs") ~= nil, "first file order preserved")
 assert_eq(collected.files[1].primary_line, 104, "primary fault line matches highest/first fault line")
 
-print("All parser & collector unit tests PASSED successfully!")
+print("--> Testing unwind.ingest_file...")
+local unwind = require("unwind")
+unwind.clear()
+unwind.ingest_file("tests/fixtures/node_trace.txt")
+assert_true(#unwind.state.frames >= 4, "ingest_file loaded node frames")
+assert_eq(unwind.state.active_index, 1, "active frame index reset to 1")
+
+print("--> Testing unwind.unwind dispatcher...")
+unwind.clear()
+unwind.unwind("tests/fixtures/ruby_trace.txt")
+assert_eq(#unwind.state.frames, 5, "unwind(filepath) loaded ruby frames")
+
+print("--> Testing interactive input scratchpad ui.open_input...")
+local ui = require("unwind.ui")
+local submitted_text = nil
+ui.open_input(function(text)
+  submitted_text = text
+end)
+
+-- Find the created buffer and populate it
+local bufs = vim.api.nvim_list_bufs()
+local test_buf = nil
+for _, b in ipairs(bufs) do
+  if vim.bo[b].buftype == "nofile" and vim.bo[b].bufhidden == "wipe" then
+    test_buf = b
+    break
+  end
+end
+assert_true(test_buf ~= nil, "input buffer created")
+vim.api.nvim_buf_set_lines(test_buf, 0, -1, false, { "File \"test.py\", line 10, in do_work" })
+-- Trigger the submit command
+vim.api.nvim_buf_call(test_buf, function()
+  vim.cmd("Write")
+end)
+assert_true(submitted_text ~= nil, "scratchpad on_submit was invoked")
+assert_true(submitted_text:find("do_work") ~= nil, "scratchpad content correctly submitted")
+
+print("All parser, collector & integration unit tests PASSED successfully!")

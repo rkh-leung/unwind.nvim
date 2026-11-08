@@ -58,6 +58,7 @@ end
 function M.clear()
   decorator.clear()
   ui.close()
+  ui.close_input()
   M.state.frames = {}
   M.state.files = {}
   M.state.active_index = 0
@@ -196,6 +197,51 @@ function M.ingest_selection()
 
   local text = table.concat(lines, "\n")
   M.ingest(text)
+end
+
+--- Ingest stacktrace from a file path
+---@param filepath string
+function M.ingest_file(filepath)
+  if not filepath or filepath == "" then
+    vim.notify("Unwind: File path must be specified.", vim.log.levels.ERROR)
+    return
+  end
+
+  local expanded_path = vim.fn.expand(filepath)
+  local f = io.open(expanded_path, "r")
+  if not f then
+    vim.notify("Unwind: Could not open file: " .. tostring(expanded_path), vim.log.levels.ERROR)
+    return
+  end
+
+  local content = f:read("*all")
+  f:close()
+
+  if not content or content == "" then
+    vim.notify("Unwind: File is empty: " .. tostring(expanded_path), vim.log.levels.WARN)
+    return
+  end
+
+  M.ingest(content)
+end
+
+--- Open an interactive floating scratchpad to paste/type a stacktrace
+function M.open_input()
+  ui.open_input(function(text)
+    M.ingest(text)
+  end)
+end
+
+--- Unified command dispatcher:
+--- If an argument is provided (file path), ingest that file.
+--- Otherwise, open the interactive paste/input scratchpad.
+---@param arg? string
+function M.unwind(arg)
+  if arg and vim.trim(arg) ~= "" then
+    M.ingest_file(vim.trim(arg))
+  else
+    M.open_input()
+  end
 end
 
 --- Toggle / Open Harpoon-style distinct files floating menu

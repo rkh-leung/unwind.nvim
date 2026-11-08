@@ -100,9 +100,22 @@ end, { desc = "Ingest stacktrace from clipboard" })
 vim.api.nvim_create_user_command("UnwindSelection", function()
   unwind.ingest_selection()
 end, { range = true, desc = "Ingest stacktrace from visual selection" })
+
+vim.api.nvim_create_user_command("UnwindFile", function(opts)
+  unwind.ingest_file(opts.args)
+end, { nargs = 1, complete = "file", desc = "Ingest stacktrace from file" })
+
+vim.api.nvim_create_user_command("UnwindInput", function()
+  unwind.open_input()
+end, { desc = "Open interactive input buffer to paste/type stacktrace" })
+
+vim.api.nvim_create_user_command("Unwind", function(opts)
+  unwind.unwind(opts.args)
+end, { nargs = "?", complete = "file", desc = "Ingest stacktrace from file or open interactive input window" })
 ```
-- Creates user-facing commands callable in Neovim command mode (`:UnwindClipboard`, `:UnwindSelection`).
+- Creates user-facing commands callable in Neovim command mode (`:Unwind`, `:UnwindFile`, `:UnwindInput`, `:UnwindClipboard`, `:UnwindSelection`).
 - Notice `{ range = true }` on `UnwindSelection`: this allows the command to accept a visual line range (e.g. running `:'<,'>UnwindSelection`).
+- `{ nargs = "?", complete = "file" }` allows filename auto-completion when supplying log files directly.
 
 ```lua
 vim.api.nvim_create_user_command("UnwindMenu", ...)
