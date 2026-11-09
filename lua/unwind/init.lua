@@ -42,7 +42,39 @@ M.config = {
 }
 
 --- Track keymaps installed by setup so repeated setup calls clean up old ones
+--- Track keymaps installed by Unwind so subsequent setup() calls clean up old ones
 M._installed_keymaps = {}
+
+--- Centralized keymap installer with ownership tracking
+---@param keymaps table|boolean|nil Keymap table or false to disable
+---@param preserve_existing? boolean If true, only sets mapping if not already mapped
+function M.install_keymaps(keymaps, preserve_existing)
+  -- Remove only mappings that Unwind previously installed
+  for _, lhs in ipairs(M._installed_keymaps) do
+    pcall(vim.keymap.del, "n", lhs)
+  end
+  M._installed_keymaps = {}
+
+  if not keymaps or keymaps == false then
+    return
+  end
+
+  local function register_key(lhs, fn, desc)
+    if lhs and lhs ~= "" then
+      if not preserve_existing or vim.fn.maparg(lhs, "n") == "" then
+        vim.keymap.set("n", lhs, fn, { desc = desc, silent = true })
+        table.insert(M._installed_keymaps, lhs)
+      end
+    end
+  end
+
+  register_key(keymaps.menu, function() M.menu() end, "Unwind: Open stacktrace files menu")
+  register_key(keymaps.clipboard, function() M.ingest_clipboard() end, "Unwind: Ingest stacktrace from clipboard")
+  register_key(keymaps.next, function() M.next() end, "Unwind: Next stack frame")
+  register_key(keymaps.prev, function() M.prev() end, "Unwind: Previous stack frame")
+  register_key(keymaps.next_file, function() M.next_file() end, "Unwind: Next stacktrace file")
+  register_key(keymaps.prev_file, function() M.prev_file() end, "Unwind: Previous stacktrace file")
+end
 
 --- Setup unwind plugin options
 ---@param opts? table
@@ -53,29 +85,13 @@ function M.setup(opts)
     M.config.ignore_patterns = user_opts.ignore_patterns
     user_opts.ignore_patterns = nil
   end
+  if user_opts.keymaps == false then
+    M.config.keymaps = false
+    user_opts.keymaps = nil
+  end
   M.config = vim.tbl_deep_extend("force", M.config, user_opts)
 
-  -- Clean up previously installed keymaps
-  for _, lhs in ipairs(M._installed_keymaps) do
-    pcall(vim.keymap.del, "n", lhs)
-  end
-  M._installed_keymaps = {}
-
-  if M.config.keymaps then
-    local function register_key(lhs, fn, desc)
-      if lhs and lhs ~= "" then
-        vim.keymap.set("n", lhs, fn, { desc = desc, silent = true })
-        table.insert(M._installed_keymaps, lhs)
-      end
-    end
-
-    register_key(M.config.keymaps.menu, function() M.menu() end, "Unwind: Open stacktrace files menu")
-    register_key(M.config.keymaps.clipboard, function() M.ingest_clipboard() end, "Unwind: Ingest stacktrace from clipboard")
-    register_key(M.config.keymaps.next, function() M.next() end, "Unwind: Next stack frame")
-    register_key(M.config.keymaps.prev, function() M.prev() end, "Unwind: Previous stack frame")
-    register_key(M.config.keymaps.next_file, function() M.next_file() end, "Unwind: Next stacktrace file")
-    register_key(M.config.keymaps.prev_file, function() M.prev_file() end, "Unwind: Previous stacktrace file")
-  end
+  M.install_keymaps(M.config.keymaps, false)
 end
 
 --- Clear active decorations and state
@@ -177,11 +193,13 @@ end
 
 --- Jump to a specific file by index (Harpoon-style file slot)
 --- Opens the target file at its primary fault line.
+--- Only commits active_file_index on successful jump_to_frame().
 ---@param file_idx number
+---@return boolean success
 function M.jump_to_file(file_idx)
   if #M.state.files == 0 then
     vim.notify("Unwind: No active stacktrace files.", vim.log.levels.WARN)
-    return
+    return false
   end
 
   if file_idx < 1 then
@@ -191,23 +209,22 @@ function M.jump_to_file(file_idx)
   end
 
   local file_entry = M.state.files[file_idx]
-  M.state.active_file_index = file_idx
 
   -- Find the first frame corresponding to this file
   for idx, frame in ipairs(M.state.frames) do
     if frame.file == file_entry.file and frame.line == file_entry.primary_line then
-      M.jump_to_frame(idx)
-      return
+      return M.jump_to_frame(idx)
     end
   end
 
   -- Fallback if exact line frame was somehow not matched
   for idx, frame in ipairs(M.state.frames) do
     if frame.file == file_entry.file then
-      M.jump_to_frame(idx)
-      return
+      return M.jump_to_frame(idx)
     end
   end
+
+  return false
 end
 
 --- Cycle sequentially to next unique file
@@ -429,8 +446,9 @@ function M.ingest_file(filepath)
     return
   end
 
+  local limit = M.config.max_input_bytes or (2 * 1024 * 1024)
   local ok, content = pcall(function()
-    return f:read("*all")
+    return f:read(limit + 1)
   end)
   f:close()
 
@@ -442,6 +460,11 @@ function M.ingest_file(filepath)
   if not content or content == "" then
     vim.notify("Unwind: File is empty: " .. tostring(expanded_path), vim.log.levels.WARN)
     return
+  end
+
+  if #content > limit then
+    vim.notify(string.format("Unwind: Ingested file exceeds maximum limit (%d bytes), truncating.", limit), vim.log.levels.WARN)
+    content = content:sub(1, limit)
   end
 
   M.ingest(content)

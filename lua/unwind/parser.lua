@@ -49,13 +49,42 @@ function M.normalize_path(raw_path, opts)
   -- Replace backslashes with forward slashes for uniform processing
   local normalized = raw_path:gsub("\\", "/")
 
+  local cwd = vim.fn.getcwd():gsub("\\", "/")
+  if cwd:sub(-1) ~= "/" then
+    cwd = cwd .. "/"
+  end
+
   -- 1. Apply explicit path_mappings if provided
+  -- Sort mappings longest-prefix-first so overlapping prefixes resolve deterministically.
   if opts.path_mappings then
-    for prefix, target in pairs(opts.path_mappings) do
+    local mapping_keys = {}
+    for prefix in pairs(opts.path_mappings) do
+      table.insert(mapping_keys, prefix)
+    end
+    table.sort(mapping_keys, function(a, b)
+      return #a > #b
+    end)
+
+    for _, prefix in ipairs(mapping_keys) do
+      local target = opts.path_mappings[prefix]
       local norm_prefix = prefix:gsub("\\", "/")
       local norm_target = target:gsub("\\", "/")
-      if normalized:sub(1, #norm_prefix) == norm_prefix then
-        local rest = normalized:sub(#norm_prefix + 1)
+
+      -- Path-segment boundary check: prefix must match exact path or end at path separator
+      local is_match = false
+      local rest = ""
+      if normalized == norm_prefix then
+        is_match = true
+        rest = ""
+      elseif norm_prefix:sub(-1) == "/" and normalized:sub(1, #norm_prefix) == norm_prefix then
+        is_match = true
+        rest = normalized:sub(#norm_prefix + 1)
+      elseif norm_prefix:sub(-1) ~= "/" and normalized:sub(1, #norm_prefix + 1) == norm_prefix .. "/" then
+        is_match = true
+        rest = normalized:sub(#norm_prefix + 2)
+      end
+
+      if is_match then
         if norm_target:sub(-1) == "/" and rest:sub(1, 1) == "/" then
           rest = rest:sub(2)
         elseif norm_target:sub(-1) ~= "/" and rest:sub(1, 1) ~= "/" and norm_target ~= "" and rest ~= "" then
@@ -64,16 +93,11 @@ function M.normalize_path(raw_path, opts)
         local candidate = norm_target .. rest
         -- If leading ./ exists, clean it up
         candidate = candidate:gsub("^%./", "")
-        if file_exists(candidate) or file_exists(raw_path) or true then
-          return store_cache(candidate)
-        end
+        -- Explicit path_mappings are intentional user configurations.
+        -- Map to candidate directly so remote prefixes map to configured local destinations.
+        return store_cache(candidate)
       end
     end
-  end
-
-  local cwd = vim.fn.getcwd():gsub("\\", "/")
-  if cwd:sub(-1) ~= "/" then
-    cwd = cwd .. "/"
   end
 
   -- If it's already an absolute path inside cwd, make it relative
@@ -97,10 +121,12 @@ function M.normalize_path(raw_path, opts)
   end
 
   -- Common container / build prefixes to strip
+  -- Conceptually strip a single project component, e.g. /usr/src/<project>/,
+  -- rather than greedily consuming multiple path components.
   local known_prefixes = {
     "^/app/",
     "^/var/task/",
-    "^/usr/src/[%w_%-./]+/",
+    "^/usr/src/[^/]+/",
     "^%a:[/\\]workspace[/\\]?",
     "^%a:[/\\]project[/\\]?",
     "^%a:[/\\]",
@@ -110,8 +136,21 @@ function M.normalize_path(raw_path, opts)
   for _, prefix in ipairs(known_prefixes) do
     local stripped = normalized:gsub(prefix, "")
     if stripped ~= normalized and stripped ~= "" then
-      if file_exists(stripped) or file_exists(cwd .. stripped) then
-        return store_cache(stripped)
+      -- Ambiguity check: if stripping leaves only 1 segment (e.g. "main.lua"),
+      -- do not loosely match root-level file unless original normalized path had <= 2 segments.
+      local stripped_segments_count = 0
+      for _ in stripped:gmatch("[^/]+") do
+        stripped_segments_count = stripped_segments_count + 1
+      end
+      local orig_segments_count = 0
+      for _ in normalized:gmatch("[^/]+") do
+        orig_segments_count = orig_segments_count + 1
+      end
+
+      if stripped_segments_count >= 2 or orig_segments_count <= 2 then
+        if file_exists(stripped) or file_exists(cwd .. stripped) then
+          return store_cache(stripped)
+        end
       end
     end
   end
@@ -336,8 +375,11 @@ local matchers = {
 
 --- Parses a raw plain-text stacktrace into a list of frame objects:
 --- { file, line, col, method, raw_line }
---- Inverts Python traceback blocks so that crash-first navigation starts
---- at the innermost fault frame instead of the outermost frame.
+--- Inverts Python traceback blocks individually so that crash-first navigation starts
+--- at the innermost fault frame instead of the outermost frame, without reordering
+--- unrelated non-Python stack frames in a mixed trace.
+--- For Python traceback blocks exceeding max_frames, retains the innermost (last N)
+--- crash frames rather than the outermost.
 ---@param text string
 ---@param opts? { path_mappings?: table<string, string>, max_frames?: number }
 ---@return table[]
@@ -356,38 +398,94 @@ function M.parse(text, opts)
 
   local max_frames = opts.max_frames or 1000
 
-  -- Check if this is a Python traceback:
-  -- "Traceback (most recent call last):"
-  -- In Python tracebacks, frames are ordered caller -> callee (most recent call last).
-  -- Reversing the frames produces crash-first navigation where frame 1 is the fault.
-  local is_python_traceback = text:find("Traceback %s*%(most recent call last%):") ~= nil
+  -- State machine for per-block Python traceback parsing
+  local in_python_block = false
+  local python_block_frames = {}
+
+  local function flush_python_block()
+    if #python_block_frames > 0 then
+      -- If the block exceeds available remaining frame budget or max_frames,
+      -- retain the LAST N frames (innermost exception frames)
+      local remaining_capacity = math.max(0, max_frames - #frames)
+      local count_to_keep = math.min(#python_block_frames, remaining_capacity)
+      local start_idx = #python_block_frames - count_to_keep + 1
+
+      -- Reverse innermost -> outermost
+      for i = #python_block_frames, start_idx, -1 do
+        table.insert(frames, python_block_frames[i])
+      end
+      python_block_frames = {}
+    end
+    in_python_block = false
+  end
 
   for line in text:gmatch("[^\r\n]+") do
     if #frames >= max_frames then
       break
     end
+
     local trimmed = line:match("^%s*(.-)%s*$")
     if trimmed ~= "" then
-      for _, matcher in ipairs(matchers) do
-        local frame = matcher(line)
-        if frame then
-          frame.raw_line = line
-          frame.file = M.normalize_path(frame.file, norm_opts)
-          frame.method = frame.method or ""
-          table.insert(frames, frame)
-          break
+      -- Check for Python traceback header
+      if line:find("Traceback %s*%(most recent call last%):") then
+        flush_python_block()
+        in_python_block = true
+      else
+        local matched_frame = nil
+        local is_python_frame = false
+
+        if in_python_block then
+          -- Check Python matcher (matcher #6)
+          matched_frame = matchers[6](line)
+          if matched_frame then
+            is_python_frame = true
+          else
+            -- If in Python block and line doesn't match Python frame, check if it's
+            -- Python traceback code line / exception line or a different stack trace
+            -- Python traceback lines are typically indented (e.g. "    response = handler()")
+            -- or exception message "ValueError: ...". If it matches another frame type
+            -- (like "at ..."), then the Python block has ended.
+            for idx, matcher in ipairs(matchers) do
+              if idx ~= 6 then
+                local candidate = matcher(line)
+                if candidate then
+                  matched_frame = candidate
+                  break
+                end
+              end
+            end
+
+            if matched_frame then
+              -- Non-Python frame encountered; flush python block
+              flush_python_block()
+            end
+          end
+        else
+          for _, matcher in ipairs(matchers) do
+            local candidate = matcher(line)
+            if candidate then
+              matched_frame = candidate
+              break
+            end
+          end
+        end
+
+        if matched_frame then
+          matched_frame.raw_line = line
+          matched_frame.file = M.normalize_path(matched_frame.file, norm_opts)
+          matched_frame.method = matched_frame.method or ""
+
+          if is_python_frame then
+            table.insert(python_block_frames, matched_frame)
+          else
+            table.insert(frames, matched_frame)
+          end
         end
       end
     end
   end
 
-  if is_python_traceback and #frames > 1 then
-    local reversed = {}
-    for i = #frames, 1, -1 do
-      table.insert(reversed, frames[i])
-    end
-    frames = reversed
-  end
+  flush_python_block()
 
   return frames
 end
