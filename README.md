@@ -121,10 +121,10 @@ Because `unwind.nvim` follows standard Neovim plugin conventions (with `plugin/`
 
 ```bash
 # For automatic loading on startup:
-git clone https://github.com/unwind-nvim/unwind.nvim.git ~/.local/share/nvim/site/pack/plugins/start/unwind.nvim
+git clone https://github.com/rkh-leung/unwind.nvim.git ~/.local/share/nvim/site/pack/plugins/start/unwind.nvim
 
 # Or for optional loading on demand:
-git clone https://github.com/unwind-nvim/unwind.nvim.git ~/.local/share/nvim/site/pack/plugins/opt/unwind.nvim
+git clone https://github.com/rkh-leung/unwind.nvim.git ~/.local/share/nvim/site/pack/plugins/opt/unwind.nvim
 ```
 
 2. Configure and load in your `init.lua`:
@@ -136,6 +136,7 @@ vim.cmd.packadd("unwind.nvim")
 -- Optionally customize configuration (single-key leader keymaps are configured by default):
 require("unwind").setup({
   filter_out_of_project = false, -- Set to true to hide vendor/library frames by default
+  path_mappings = {},            -- Explicit remote-to-local path prefixes { ["/remote/app/"] = "./" }
   ignore_patterns = {            -- Custom patterns to identify vendor paths
     "shared/bundle/",
     "vendor/bundle/",
@@ -158,7 +159,7 @@ require("unwind").setup({
 
 ```lua
 {
-  "unwind-nvim/unwind.nvim",
+  "rkh-leung/unwind.nvim",
   config = function()
     require("unwind").setup({
       keymaps = {

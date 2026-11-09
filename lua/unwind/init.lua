@@ -21,6 +21,9 @@ M.state = {
 --- Default configuration
 M.config = {
   filter_out_of_project = false,
+  path_mappings = {},
+  max_input_bytes = 2 * 1024 * 1024, -- 2MB max input
+  max_frames = 1000,
   ignore_patterns = {
     "shared/bundle/",
     "vendor/bundle/",
@@ -38,47 +41,40 @@ M.config = {
   },
 }
 
+--- Track keymaps installed by setup so repeated setup calls clean up old ones
+M._installed_keymaps = {}
+
 --- Setup unwind plugin options
 ---@param opts? table
 function M.setup(opts)
-  opts = opts or {}
-  if opts.ignore_patterns then
-    M.config.ignore_patterns = opts.ignore_patterns
-    opts.ignore_patterns = nil
+  -- Clone opts shallowly so we never mutate caller's options table
+  local user_opts = opts and vim.tbl_extend("force", {}, opts) or {}
+  if user_opts.ignore_patterns then
+    M.config.ignore_patterns = user_opts.ignore_patterns
+    user_opts.ignore_patterns = nil
   end
-  M.config = vim.tbl_deep_extend("force", M.config, opts or {})
+  M.config = vim.tbl_deep_extend("force", M.config, user_opts)
+
+  -- Clean up previously installed keymaps
+  for _, lhs in ipairs(M._installed_keymaps) do
+    pcall(vim.keymap.del, "n", lhs)
+  end
+  M._installed_keymaps = {}
 
   if M.config.keymaps then
-    if M.config.keymaps.menu then
-      vim.keymap.set("n", M.config.keymaps.menu, function()
-        M.menu()
-      end, { desc = "Unwind: Open stacktrace files menu", silent = true })
+    local function register_key(lhs, fn, desc)
+      if lhs and lhs ~= "" then
+        vim.keymap.set("n", lhs, fn, { desc = desc, silent = true })
+        table.insert(M._installed_keymaps, lhs)
+      end
     end
-    if M.config.keymaps.clipboard then
-      vim.keymap.set("n", M.config.keymaps.clipboard, function()
-        M.ingest_clipboard()
-      end, { desc = "Unwind: Ingest stacktrace from clipboard", silent = true })
-    end
-    if M.config.keymaps.next then
-      vim.keymap.set("n", M.config.keymaps.next, function()
-        M.next()
-      end, { desc = "Unwind: Next stack frame", silent = true })
-    end
-    if M.config.keymaps.prev then
-      vim.keymap.set("n", M.config.keymaps.prev, function()
-        M.prev()
-      end, { desc = "Unwind: Previous stack frame", silent = true })
-    end
-    if M.config.keymaps.next_file then
-      vim.keymap.set("n", M.config.keymaps.next_file, function()
-        M.next_file()
-      end, { desc = "Unwind: Next stacktrace file", silent = true })
-    end
-    if M.config.keymaps.prev_file then
-      vim.keymap.set("n", M.config.keymaps.prev_file, function()
-        M.prev_file()
-      end, { desc = "Unwind: Previous stacktrace file", silent = true })
-    end
+
+    register_key(M.config.keymaps.menu, function() M.menu() end, "Unwind: Open stacktrace files menu")
+    register_key(M.config.keymaps.clipboard, function() M.ingest_clipboard() end, "Unwind: Ingest stacktrace from clipboard")
+    register_key(M.config.keymaps.next, function() M.next() end, "Unwind: Next stack frame")
+    register_key(M.config.keymaps.prev, function() M.prev() end, "Unwind: Previous stack frame")
+    register_key(M.config.keymaps.next_file, function() M.next_file() end, "Unwind: Next stacktrace file")
+    register_key(M.config.keymaps.prev_file, function() M.prev_file() end, "Unwind: Previous stacktrace file")
   end
 end
 
@@ -98,11 +94,14 @@ end
 --- Jump to a specific frame by index
 --- Opens the target file (vim.cmd.edit), moves cursor to target line and column,
 --- and re-renders virt_lines extmark decoration on the active line.
+--- Guards against nonexistent files to prevent creating empty buffers,
+--- and only commits active_index once navigation has succeeded.
 ---@param idx number
+---@return boolean success
 function M.jump_to_frame(idx)
   if #M.state.frames == 0 then
     vim.notify("Unwind: No active stacktrace.", vim.log.levels.WARN)
-    return
+    return false
   end
 
   if idx < 1 then
@@ -111,7 +110,6 @@ function M.jump_to_frame(idx)
     idx = #M.state.frames
   end
 
-  M.state.active_index = idx
   local frame = M.state.frames[idx]
 
   -- Open the target file or switch to existing loaded buffer
@@ -124,13 +122,29 @@ function M.jump_to_frame(idx)
     if existing_buf == -1 then
       existing_buf = vim.fn.bufnr(target_full)
     end
-    if existing_buf ~= -1 and vim.api.nvim_buf_is_valid(existing_buf) and vim.api.nvim_buf_is_loaded(existing_buf) then
+
+    local already_loaded = existing_buf ~= -1
+      and vim.api.nvim_buf_is_valid(existing_buf)
+      and vim.api.nvim_buf_is_loaded(existing_buf)
+
+    if already_loaded then
       vim.api.nvim_set_current_buf(existing_buf)
     else
+      -- Check filesystem stat before edit to prevent creating empty persistent buffers
+      local stat = (vim.uv or vim.loop).fs_stat(target_full)
+      if not stat or stat.type ~= "file" then
+        stat = (vim.uv or vim.loop).fs_stat(frame.file)
+      end
+
+      if not stat or stat.type ~= "file" then
+        vim.notify("Unwind: File not found: " .. tostring(frame.file), vim.log.levels.WARN)
+        return false
+      end
+
       local ok, err = pcall(vim.cmd.edit, vim.fn.fnameescape(frame.file))
       if not ok then
         vim.notify("Unwind: Could not open file " .. tostring(frame.file) .. ": " .. tostring(err), vim.log.levels.ERROR)
-        return
+        return false
       end
     end
   end
@@ -147,7 +161,8 @@ function M.jump_to_frame(idx)
     pcall(vim.api.nvim_win_set_cursor, 0, { target_line, 0 })
   end
 
-  -- Update active_file_index matching this frame's file
+  -- Navigation succeeded! Now commit active indices
+  M.state.active_index = idx
   for f_idx, f_entry in ipairs(M.state.files) do
     if f_entry.file == frame.file then
       M.state.active_file_index = f_idx
@@ -157,6 +172,7 @@ function M.jump_to_frame(idx)
 
   -- Re-render extmark decoration on the active line
   decorator.render(bufnr, target_line, idx, frame.method, frame.file, #M.state.frames)
+  return true
 end
 
 --- Jump to a specific file by index (Harpoon-style file slot)
@@ -273,6 +289,12 @@ function M.toggle_filter()
   M.state.filter_enabled = not M.state.filter_enabled
   M.reapply_filter()
 
+  if #M.state.frames == 0 then
+    vim.notify("Unwind: All frames were filtered out as vendor/external files.", vim.log.levels.WARN)
+    decorator.clear()
+    return
+  end
+
   local status = M.state.filter_enabled and "enabled (hiding vendor/library files)" or "disabled (showing all files)"
   vim.notify(string.format("Unwind: Vendor filter %s (%d frames, %d files).", status, #M.state.frames, #M.state.files), vim.log.levels.INFO)
 
@@ -287,7 +309,16 @@ function M.ingest(text)
     return
   end
 
-  local frames = parser.parse(text)
+  local max_bytes = M.config.max_input_bytes or (2 * 1024 * 1024)
+  if #text > max_bytes then
+    vim.notify(string.format("Unwind: Ingested text exceeds maximum limit (%d bytes), truncating.", max_bytes), vim.log.levels.WARN)
+    text = text:sub(1, max_bytes)
+  end
+
+  local frames = parser.parse(text, {
+    path_mappings = M.config.path_mappings,
+    max_frames = M.config.max_frames,
+  })
   if #frames == 0 then
     vim.notify("Unwind: No stack frames recognized in input.", vim.log.levels.WARN)
     return
@@ -304,6 +335,11 @@ function M.ingest(text)
   M.state.files = collected.files
   M.state.active_index = 0
   M.state.active_file_index = 0
+
+  if #M.state.frames == 0 then
+    vim.notify("Unwind: All recognized frames were filtered out as vendor/external files.", vim.log.levels.WARN)
+    return
+  end
 
   vim.notify(string.format("Unwind: Loaded %d frames across %d files.", #M.state.frames, #collected.files), vim.log.levels.INFO)
 
