@@ -196,7 +196,11 @@ local matchers = {
   -- or with single quotes: 'from /path/to/file.rb:12:in '\''method_name\'\''
   -- or blocks: 'from /path/to/file.rb:12:in `block in foo'\''
   function(line)
-    local file, lnum, method = line:match("([^:]+%.%w+):(%d+):in%s+[`'](.-)['`]")
+    -- Check Windows drive letter path first e.g. C:\project\app.rb:12:in ...
+    local file, lnum, method = line:match("([%a]:[/\\][^:]+%.%w+):(%d+):in%s+[`'](.-)['`]")
+    if not file then
+      file, lnum, method = line:match("([^:]+%.%w+):(%d+):in%s+[`'](.-)['`]")
+    end
     if file and lnum then
       file = file:match("^%s*from%s+(.+)$") or file
       return {
@@ -207,7 +211,10 @@ local matchers = {
       }
     end
     -- Also match Ruby lines where in has no backticks/quotes or is omitted:
-    local f2, l2 = line:match("([^:]+%.%w+):(%d+):?")
+    local f2, l2 = line:match("([%a]:[/\\][^:]+%.%w+):(%d+):?")
+    if not f2 then
+      f2, l2 = line:match("([^:]+%.%w+):(%d+):?")
+    end
     if f2 and l2 and (line:find("^%s*from%s+") or line:find("%.rb:%d+")) then
       f2 = f2:match("^%s*from%s+(.+)$") or f2
       return {
@@ -224,11 +231,37 @@ local matchers = {
   -- matches path:line:col or path:line
   -- support paths with spaces, @, +, (), etc.
   function(line)
-    -- Match leading non-colon or trimmed prefix up to :line:col or :line
-    local file, lnum, col = line:match("^%s*([^:\r\n]+%.%w+):(%d+):?(%d*)")
-    if not file or not lnum then
+    -- Skip URLs early
+    if line:match("https?://") or line:match("ftp://") then
+      return nil
+    end
+
+    local file, lnum, col
+
+    -- 1. Try Windows path (e.g. C:\path\file.ext:line[:col]) without spaces
+    file, lnum, col = line:match("([%a]:[/\\][%w_%-./\\]+%.%w+):(%d+):?(%d*)")
+
+    -- 2. Standard clean path token without prefix words (e.g. "[ERROR] src/main.rs:45:12" -> "src/main.rs")
+    if not file then
       file, lnum, col = line:match("([%w_%-./\\]+%.%w+):(%d+):?(%d*)")
     end
+
+    -- 3. Fallback for paths with spaces, @, +, (), anchored after whitespace/brackets/quotes
+    if not file then
+      file, lnum, col = line:match("[%s%[\"'%(]([%a]:[/\\][^:\r\n\"'%[%]%(%)]+%.%w+):(%d+):?(%d*)")
+    end
+    if not file then
+      file, lnum, col = line:match("[%s%[\"'%(]([^:\r\n\"'%[%]%(%)]+%.%w+):(%d+):?(%d*)")
+    end
+
+    -- 4. Start of line with path that might contain spaces/special characters
+    if not file then
+      file, lnum, col = line:match("^%s*([%a]:[/\\][^:\r\n\"'%[%]%(%)]+%.%w+):(%d+):?(%d*)")
+    end
+    if not file then
+      file, lnum, col = line:match("^%s*([^:\r\n\"'%[%]%(%)]+%.%w+):(%d+):?(%d*)")
+    end
+
     if file and lnum then
       -- Skip common falsy URL prefixes like http:// or https://
       if file:match("^https?:") or file:match("^ftp:") then

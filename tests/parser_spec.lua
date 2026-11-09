@@ -127,12 +127,45 @@ assert_eq(ruby_frames[3].method, "authenticate!", "ruby frame 3 method")
 assert_eq(ruby_frames[4].method, "<main>", "ruby frame 4 method")
 assert_eq(ruby_frames[5].method, "<top (required)>", "ruby frame 5 method")
 
-print("--> Testing generic fallback...")
+print("--> Testing generic fallback & prefix word stripping...")
 local generic_text = "some/module/worker.go:99:4: something went wrong"
 local gen_frames = parser.parse(generic_text)
 assert_true(#gen_frames >= 1, "generic fallback frame parsed")
 assert_eq(gen_frames[1].line, 99, "generic line")
 assert_eq(gen_frames[1].col, 4, "generic col")
+
+-- Generic matcher prefix word stripping
+local prefix_frames = parser.parse([[
+[ERROR] src/main.rs:45:12
+failed in test/runner.py:10
+]])
+assert_eq(#prefix_frames, 2, "prefix lines parsed")
+assert_eq(prefix_frames[1].file, "src/main.rs", "prefix frame 1 file stripped of [ERROR]")
+assert_eq(prefix_frames[1].line, 45, "prefix frame 1 line")
+assert_eq(prefix_frames[1].col, 12, "prefix frame 1 col")
+assert_eq(prefix_frames[2].file, "test/runner.py", "prefix frame 2 file stripped of 'failed in'")
+assert_eq(prefix_frames[2].line, 10, "prefix frame 2 line")
+
+-- Windows drive letter support in Generic and Ruby matchers
+print("--> Testing Windows drive letter parsing...")
+local win_ruby = [[
+C:\project\app.rb:12:in `show'
+C:/project/helpers/util.rb:34:in 'format'
+]]
+local win_ruby_frames = parser.parse(win_ruby)
+assert_eq(#win_ruby_frames, 2, "windows ruby frames count")
+assert_true(win_ruby_frames[1].file:find("project/app%.rb") ~= nil or win_ruby_frames[1].file:find("app%.rb") ~= nil, "windows ruby frame 1 path normalized")
+assert_eq(win_ruby_frames[1].line, 12, "windows ruby frame 1 line")
+assert_eq(win_ruby_frames[1].method, "show", "windows ruby frame 1 method")
+assert_eq(win_ruby_frames[2].line, 34, "windows ruby frame 2 line")
+assert_eq(win_ruby_frames[2].method, "format", "windows ruby frame 2 method")
+
+local win_generic = "C:\\workspace\\src\\server.ts:88:5"
+local win_gen_frames = parser.parse(win_generic)
+assert_eq(#win_gen_frames, 1, "windows generic frame parsed")
+assert_true(win_gen_frames[1].file:find("src/server%.ts") ~= nil or win_gen_frames[1].file:find("server%.ts") ~= nil, "windows generic normalized")
+assert_eq(win_gen_frames[1].line, 88, "windows generic line")
+assert_eq(win_gen_frames[1].col, 5, "windows generic col")
 
 print("--> Testing collector deduplication...")
 local collected = collector.collect(raygun_frames)
@@ -178,6 +211,15 @@ vim.api.nvim_buf_call(test_buf, function()
 end)
 assert_true(submitted_text ~= nil, "scratchpad on_submit was invoked via :w")
 assert_true(submitted_text:find("do_work") ~= nil, "scratchpad content correctly submitted")
+
+-- Test reopening ui.open_input to verify no E95: Buffer with this name already exists
+local reopen_ok, reopen_err = pcall(function()
+  ui.open_input(function(_) end)
+  ui.close_input()
+  ui.open_input(function(_) end)
+  ui.close_input()
+end)
+assert_true(reopen_ok, "reopening input scratchpad should succeed without E95: " .. tostring(reopen_err))
 
 print("--> Testing vendor filtering and file navigation...")
 local vendor_trace = [[
@@ -269,5 +311,31 @@ unwind.clear()
 unwind.ingest_range(2, 2)
 assert_eq(#unwind.state.frames, 1, "ingest_range parsed frame")
 assert_eq(unwind.state.frames[1].line, 99, "ingest_range line")
+
+-- Test ingest_range with inverted arguments (line1 > line2)
+vim.api.nvim_set_current_buf(range_buf)
+unwind.clear()
+unwind.ingest_range(3, 1)
+assert_eq(#unwind.state.frames, 1, "ingest_range with inverted bounds parsed frame")
+assert_eq(unwind.state.frames[1].line, 99, "ingest_range inverted line")
+
+print("--> Testing floating file menu wrap setting...")
+unwind.clear()
+unwind.ingest('File "test_wrap.py", line 1, in func')
+unwind.menu()
+-- Find open menu window and check wrap setting
+local wins = vim.api.nvim_list_wins()
+local menu_win_found = false
+for _, w in ipairs(wins) do
+  local b = vim.api.nvim_win_get_buf(w)
+  local bt = vim.bo[b].buftype
+  if bt == "nofile" and vim.wo[w].cursorline then
+    assert_eq(vim.wo[w].wrap, false, "menu window wrap must be false")
+    menu_win_found = true
+    break
+  end
+end
+assert_true(menu_win_found, "floating menu window found and verified wrap=false")
+unwind.clear()
 
 print("All parser, collector & integration unit tests PASSED successfully!")

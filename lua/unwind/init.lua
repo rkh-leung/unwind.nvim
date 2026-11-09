@@ -305,6 +305,7 @@ end
 ---@param line1 number
 ---@param line2 number
 function M.ingest_range(line1, line2)
+  line1, line2 = math.min(line1, line2), math.max(line1, line2)
   local bufnr = vim.api.nvim_get_current_buf()
   local lines = vim.api.nvim_buf_get_lines(bufnr, line1 - 1, line2, false)
   M.ingest(table.concat(lines, "\n"))
@@ -348,8 +349,7 @@ function M.quickfix()
     })
   end
 
-  vim.fn.setqflist(qf_items, "r")
-  vim.fn.setqflist({}, "a", { title = "Unwind Stacktrace" })
+  vim.fn.setqflist({}, "r", { items = qf_items, title = "Unwind Stacktrace" })
   vim.cmd("copen")
 end
 
