@@ -184,6 +184,7 @@ local matchers = {
   -- 7. Ruby style:
   -- 'from /path/to/file.rb:12:in `method_name'\'' or '/path/to/file.rb:12:in `method_name\': error msg'
   -- or with single quotes: 'from /path/to/file.rb:12:in '\''method_name\'\''
+  -- or blocks: 'from /path/to/file.rb:12:in `block in foo'\''
   function(line)
     local file, lnum, method = line:match("([%w_%-./\\]+%.%w+):(%d+):in%s+[`'](.-)['`]")
     if file and lnum then
@@ -192,6 +193,16 @@ local matchers = {
         line = tonumber(lnum),
         col = 1,
         method = method or "",
+      }
+    end
+    -- Also match Ruby lines where in has no backticks/quotes or is omitted:
+    local f2, l2 = line:match("([%w_%-./\\]+%.%w+):(%d+):?")
+    if f2 and l2 and (line:find("^%s*from%s+") or line:find("%.rb:%d+")) then
+      return {
+        file = f2,
+        line = tonumber(l2),
+        col = 1,
+        method = "",
       }
     end
     return nil
@@ -235,9 +246,7 @@ function M.parse(text)
         if frame then
           frame.raw_line = line
           frame.file = M.normalize_path(frame.file)
-          if not frame.method or frame.method == "" then
-            frame.method = "anonymous"
-          end
+          frame.method = frame.method or ""
           table.insert(frames, frame)
           break
         end

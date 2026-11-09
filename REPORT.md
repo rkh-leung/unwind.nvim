@@ -71,6 +71,9 @@ When Neovim starts up or when the plugin is loaded via `packadd` or a plugin man
   - `:UnwindMenu`: Toggles the Harpoon-style file switching float.
   - `:UnwindNext`: Cycles forward to the next stack frame.
   - `:UnwindPrev`: Cycles backward to the previous stack frame.
+  - `:UnwindNextFile`: Cycles forward directly to the next unique file.
+  - `:UnwindPrevFile`: Cycles backward directly to the previous unique file.
+  - `:UnwindToggleFilter`: Toggles vendor / out-of-workspace library filtering.
   - `:UnwindClear`: Clears all extmarks, floating windows, and state.
 - Automatically calls `unwind.setup()` with defaults unless pre-configured.
 
@@ -164,6 +167,9 @@ All default leader keymaps follow single-key mappings:
 | Ingest Clipboard | `:UnwindClipboard` | `<leader>c` | - |
 | Next Frame | `:UnwindNext` | `]u` | - |
 | Previous Frame | `:UnwindPrev` | `[u` | - |
+| Next File | `:UnwindNextFile` | `]f` | - |
+| Previous File | `:UnwindPrevFile` | `[f` | - |
+| Toggle Filter | `:UnwindToggleFilter` | - | - |
 | Clear Telemetry | `:UnwindClear` | - | - |
 | Select Slot 1–9 | - | - | `1` – `9` |
 | Confirm Selection | - | - | `<CR>` |

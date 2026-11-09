@@ -121,9 +121,12 @@ end, { nargs = "?", complete = "file", desc = "Ingest stacktrace from file or op
 vim.api.nvim_create_user_command("UnwindMenu", ...)
 vim.api.nvim_create_user_command("UnwindNext", ...)
 vim.api.nvim_create_user_command("UnwindPrev", ...)
+vim.api.nvim_create_user_command("UnwindNextFile", ...)
+vim.api.nvim_create_user_command("UnwindPrevFile", ...)
+vim.api.nvim_create_user_command("UnwindToggleFilter", ...)
 vim.api.nvim_create_user_command("UnwindClear", ...)
 ```
-- Exposes commands to toggle the menu, cycle forward/backward through call stack frames, and clear active diagnostics.
+- Exposes commands to toggle the menu, cycle forward/backward through call stack frames, navigate directly between unique files, toggle third-party vendor filtering, and clear active diagnostics.
 
 ```lua
 unwind.setup()

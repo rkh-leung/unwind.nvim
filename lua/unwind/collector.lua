@@ -4,16 +4,67 @@
 
 local M = {}
 
+--- Checks if a file path matches any pattern in the ignore list or is external to workspace
+---@param fpath string
+---@param ignore_patterns? string[]
+---@return boolean is_ignored
+function M.is_vendor_or_ignored(fpath, ignore_patterns)
+  if not fpath then
+    return false
+  end
+
+  local patterns = ignore_patterns or {
+    "shared/bundle/",
+    "vendor/bundle/",
+    "/gems/",
+    "node_modules/",
+    "^/usr/",
+  }
+
+  for _, pattern in ipairs(patterns) do
+    if fpath:find(pattern) then
+      return true
+    end
+  end
+
+  return false
+end
+
 --- Collects and deduplicates parsed frames by unique file path.
 --- Retains original occurrence order (first file implicated in trace at index 1).
 --- Tracks total frame count and primary line (the highest/first fault line) for each unique file.
+--- Supports filtering out vendor / third-party / ignored library frames.
 ---@param frames table[] List of frame objects { file, line, col, method, raw_line }
+---@param opts? { filter_vendor?: boolean, ignore_patterns?: string[], only_workspace_files?: boolean }
 ---@return { files: table[], frames: table[] }
-function M.collect(frames)
+function M.collect(frames, opts)
+  opts = opts or {}
+  local filter_vendor = opts.filter_vendor or false
+  local ignore_patterns = opts.ignore_patterns
+
+  local filtered_frames = {}
+  for _, frame in ipairs(frames) do
+    local fpath = frame.file
+    local should_ignore = false
+
+    if filter_vendor then
+      if M.is_vendor_or_ignored(fpath, ignore_patterns) then
+        should_ignore = true
+      end
+    end
+
+    if not should_ignore then
+      table.insert(filtered_frames, frame)
+    end
+  end
+
+  -- If filter eliminated all frames, fallback to all frames so user isn't left empty-handed
+  local active_frames = (#filtered_frames > 0) and filtered_frames or frames
+
   local files = {}
   local file_map = {} -- keyed by file path -> index in files list
 
-  for _, frame in ipairs(frames) do
+  for _, frame in ipairs(active_frames) do
     local fpath = frame.file
     local existing_idx = file_map[fpath]
 
@@ -25,6 +76,7 @@ function M.collect(frames)
         primary_method = frame.method or "",
         total_frames = 1,
         frames = { frame },
+        is_vendor = M.is_vendor_or_ignored(fpath, ignore_patterns),
       }
       table.insert(files, entry)
       file_map[fpath] = #files
@@ -37,7 +89,7 @@ function M.collect(frames)
 
   return {
     files = files,
-    frames = frames,
+    frames = active_frames,
   }
 end
 

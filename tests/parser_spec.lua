@@ -139,4 +139,56 @@ end)
 assert_true(submitted_text ~= nil, "scratchpad on_submit was invoked")
 assert_true(submitted_text:find("do_work") ~= nil, "scratchpad content correctly submitted")
 
+print("--> Testing vendor filtering and file navigation...")
+local vendor_trace = [[
+core/app/presenters/feed.rb:10:in `render'
+/apps/powershop/shared/bundle/ruby/3.3.0/gems/activesupport-8.1.3.1/lib/active_support/callbacks.rb:27:in `run'
+/apps/powershop/shared/bundle/ruby/3.3.0/gems/activesupport-8.1.3.1/lib/active_support/callbacks.rb:50:in `compile'
+/usr/lib/x86_64-linux-gnu/ruby/3.3.0/delegate.rb:15:in `method_missing'
+app/models/brand.rb:5:in `name'
+]]
+
+unwind.clear()
+unwind.ingest(vendor_trace)
+assert_eq(#unwind.state.frames, 5, "total raw frames without filter")
+assert_eq(#unwind.state.files, 4, "total files without filter")
+
+-- Check vendor tagging
+assert_true(not unwind.state.files[1].is_vendor, "feed.rb should not be vendor")
+assert_true(unwind.state.files[2].is_vendor, "activesupport should be tagged vendor")
+assert_true(unwind.state.files[3].is_vendor, "delegate.rb should be tagged vendor")
+assert_true(not unwind.state.files[4].is_vendor, "brand.rb should not be vendor")
+
+-- Test next_file / prev_file cycling
+unwind.jump_to_file(1)
+assert_eq(unwind.state.active_file_index, 1, "active file index 1")
+unwind.next_file()
+assert_eq(unwind.state.active_file_index, 2, "next_file moved to index 2")
+unwind.prev_file()
+assert_eq(unwind.state.active_file_index, 1, "prev_file moved back to index 1")
+
+-- Test toggle_filter
+unwind.toggle_filter()
+assert_true(unwind.state.filter_enabled, "filter enabled")
+assert_eq(#unwind.state.files, 2, "filtered files should only have 2 workspace files")
+assert_eq(unwind.state.files[1].file, "core/app/presenters/feed.rb", "filtered file 1")
+assert_eq(unwind.state.files[2].file, "app/models/brand.rb", "filtered file 2")
+
+-- Toggle filter off
+unwind.toggle_filter()
+assert_true(not unwind.state.filter_enabled, "filter disabled")
+assert_eq(#unwind.state.files, 4, "all files restored after toggling filter off")
+
+print("--> Testing decorator formatting without anonymous()...")
+local decorator = require("unwind.decorator")
+local decor_buf = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_lines(decor_buf, 0, -1, false, { "line 1", "line 2" })
+local ext_id = decorator.render(decor_buf, 1, 1, "", "core/test.rb", 5)
+assert_true(ext_id ~= nil, "decorator extmark rendered")
+local extmarks = vim.api.nvim_buf_get_extmarks(decor_buf, decorator.get_namespace(), 0, -1, { details = true })
+assert_true(#extmarks > 0, "extmarks exist in buffer")
+local header = extmarks[1][4].virt_lines[1][1][1]
+assert_true(header:find("anonymous") == nil, "header should not contain anonymous, got: " .. header)
+assert_true(header:find("Frame #1/5") ~= nil, "header should contain Frame #1/5, got: " .. header)
+
 print("All parser, collector & integration unit tests PASSED successfully!")

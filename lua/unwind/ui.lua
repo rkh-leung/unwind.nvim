@@ -65,6 +65,9 @@ function M.open(files, on_select)
   for idx, item in ipairs(files) do
     local prefix = string.format("%d. %s", idx, item.file)
     local frame_suffix = string.format("(%d frame%s)", item.total_frames, item.total_frames > 1 and "s" or "")
+    if item.is_vendor then
+      frame_suffix = frame_suffix .. " [vendor]"
+    end
     local padding_len = math.max(2, target_width - #prefix - #frame_suffix - 4)
     local line_str = prefix .. string.rep(" ", padding_len) .. frame_suffix
     table.insert(lines, line_str)

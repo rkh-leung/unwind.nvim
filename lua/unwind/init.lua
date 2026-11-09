@@ -10,18 +10,31 @@ local M = {}
 
 --- Internal state
 M.state = {
+  raw_frames = {},
   frames = {},
   files = {},
   active_index = 0,
+  active_file_index = 0,
+  filter_enabled = false,
 }
 
 --- Default configuration
 M.config = {
+  filter_out_of_project = false,
+  ignore_patterns = {
+    "shared/bundle/",
+    "vendor/bundle/",
+    "/gems/",
+    "node_modules/",
+    "^/usr/",
+  },
   keymaps = {
     menu = "<leader>w",
     clipboard = "<leader>c",
     next = "]u",
     prev = "[u",
+    next_file = "]f",
+    prev_file = "[f",
   },
 }
 
@@ -51,6 +64,16 @@ function M.setup(opts)
         M.prev()
       end, { desc = "Unwind: Previous stack frame", silent = true })
     end
+    if M.config.keymaps.next_file then
+      vim.keymap.set("n", M.config.keymaps.next_file, function()
+        M.next_file()
+      end, { desc = "Unwind: Next stacktrace file", silent = true })
+    end
+    if M.config.keymaps.prev_file then
+      vim.keymap.set("n", M.config.keymaps.prev_file, function()
+        M.prev_file()
+      end, { desc = "Unwind: Previous stacktrace file", silent = true })
+    end
   end
 end
 
@@ -59,9 +82,11 @@ function M.clear()
   decorator.clear()
   ui.close()
   ui.close_input()
+  M.state.raw_frames = {}
   M.state.frames = {}
   M.state.files = {}
   M.state.active_index = 0
+  M.state.active_file_index = 0
   vim.notify("Unwind: Cleared stacktrace state and diagnostics.", vim.log.levels.INFO)
 end
 
@@ -102,8 +127,77 @@ function M.jump_to_frame(idx)
   -- Move cursor to target line and column
   pcall(vim.api.nvim_win_set_cursor, 0, { target_line, target_col })
 
+  -- Update active_file_index matching this frame's file
+  for f_idx, f_entry in ipairs(M.state.files) do
+    if f_entry.file == frame.file then
+      M.state.active_file_index = f_idx
+      break
+    end
+  end
+
   -- Re-render extmark decoration on the active line
-  decorator.render(bufnr, target_line, idx, frame.method, frame.file)
+  decorator.render(bufnr, target_line, idx, frame.method, frame.file, #M.state.frames)
+end
+
+--- Jump to a specific file by index (Harpoon-style file slot)
+--- Opens the target file at its primary fault line.
+---@param file_idx number
+function M.jump_to_file(file_idx)
+  if #M.state.files == 0 then
+    vim.notify("Unwind: No active stacktrace files.", vim.log.levels.WARN)
+    return
+  end
+
+  if file_idx < 1 then
+    file_idx = 1
+  elseif file_idx > #M.state.files then
+    file_idx = #M.state.files
+  end
+
+  local file_entry = M.state.files[file_idx]
+  M.state.active_file_index = file_idx
+
+  -- Find the first frame corresponding to this file
+  for idx, frame in ipairs(M.state.frames) do
+    if frame.file == file_entry.file and frame.line == file_entry.primary_line then
+      M.jump_to_frame(idx)
+      return
+    end
+  end
+
+  -- Fallback if exact line frame was somehow not matched
+  for idx, frame in ipairs(M.state.frames) do
+    if frame.file == file_entry.file then
+      M.jump_to_frame(idx)
+      return
+    end
+  end
+end
+
+--- Cycle sequentially to next unique file
+function M.next_file()
+  if #M.state.files == 0 then
+    vim.notify("Unwind: No active stacktrace files.", vim.log.levels.WARN)
+    return
+  end
+  local next_fidx = (M.state.active_file_index or 0) + 1
+  if next_fidx > #M.state.files then
+    next_fidx = 1
+  end
+  M.jump_to_file(next_fidx)
+end
+
+--- Cycle sequentially to previous unique file
+function M.prev_file()
+  if #M.state.files == 0 then
+    vim.notify("Unwind: No active stacktrace files.", vim.log.levels.WARN)
+    return
+  end
+  local prev_fidx = (M.state.active_file_index or 0) - 1
+  if prev_fidx < 1 then
+    prev_fidx = #M.state.files
+  end
+  M.jump_to_file(prev_fidx)
 end
 
 --- Cycle sequentially to next stack frame
@@ -132,6 +226,39 @@ function M.prev()
   M.jump_to_frame(prev_idx)
 end
 
+--- Re-apply collection and update state with current filter setting
+function M.reapply_filter()
+  if not M.state.raw_frames or #M.state.raw_frames == 0 then
+    return
+  end
+
+  local collected = collector.collect(M.state.raw_frames, {
+    filter_vendor = M.state.filter_enabled,
+    ignore_patterns = M.config.ignore_patterns,
+  })
+
+  M.state.frames = collected.frames
+  M.state.files = collected.files
+  M.state.active_index = 0
+  M.state.active_file_index = 0
+end
+
+--- Toggle vendor / library filtering
+function M.toggle_filter()
+  if not M.state.raw_frames or #M.state.raw_frames == 0 then
+    vim.notify("Unwind: No active stacktrace to filter.", vim.log.levels.WARN)
+    return
+  end
+
+  M.state.filter_enabled = not M.state.filter_enabled
+  M.reapply_filter()
+
+  local status = M.state.filter_enabled and "enabled (hiding vendor/library files)" or "disabled (showing all files)"
+  vim.notify(string.format("Unwind: Vendor filter %s (%d frames, %d files).", status, #M.state.frames, #M.state.files), vim.log.levels.INFO)
+
+  M.jump_to_frame(1)
+end
+
 --- Ingest a raw plain-text stacktrace string
 ---@param text string
 function M.ingest(text)
@@ -146,12 +273,19 @@ function M.ingest(text)
     return
   end
 
-  local collected = collector.collect(frames)
+  M.state.raw_frames = frames
+  M.state.filter_enabled = M.config.filter_out_of_project or false
+
+  local collected = collector.collect(frames, {
+    filter_vendor = M.state.filter_enabled,
+    ignore_patterns = M.config.ignore_patterns,
+  })
   M.state.frames = collected.frames
   M.state.files = collected.files
   M.state.active_index = 0
+  M.state.active_file_index = 0
 
-  vim.notify(string.format("Unwind: Loaded %d frames across %d files.", #frames, #collected.files), vim.log.levels.INFO)
+  vim.notify(string.format("Unwind: Loaded %d frames across %d files.", #M.state.frames, #collected.files), vim.log.levels.INFO)
 
   -- Jump to the first frame immediately
   M.jump_to_frame(1)
