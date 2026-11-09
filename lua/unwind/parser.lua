@@ -40,7 +40,14 @@ function M.normalize_path(raw_path)
   end
 
   -- If it's already an absolute path inside cwd, make it relative
-  if normalized:sub(1, #cwd) == cwd then
+  -- On Windows, drive letter case might differ (e.g. C:/ vs c:/)
+  local is_in_cwd = normalized:sub(1, #cwd) == cwd
+  if not is_in_cwd and (vim.fn.has("win32") == 1 or normalized:match("^%a:[/\\]") or cwd:match("^%a:[/\\]")) then
+    if normalized:sub(1, #cwd):lower() == cwd:lower() then
+      is_in_cwd = true
+    end
+  end
+  if is_in_cwd then
     local rel = normalized:sub(#cwd + 1)
     if file_exists(rel) then
       return rel
@@ -108,8 +115,9 @@ local matchers = {
 
   -- 2. Java / .NET without "in ... :line":
   -- "at Class.Method(File.java:123)" or "at Class.Method(Unknown Source)"
+  -- Supports inner classes ($), lambdas ($ and /), Kotlin coroutines ($)
   function(line)
-    local method, file, lnum = line:match("^%s*at%s+([%w_%.%<%>&]+)%(([%w_%-./\\]+%.%w+):(%d+)%)")
+    local method, file, lnum = line:match("^%s*at%s+(.-)%s*%(([%w_%-./\\]+%.%w+):(%d+)%)")
     if file and lnum then
       return {
         file = file,
@@ -122,9 +130,12 @@ local matchers = {
   end,
 
   -- 3. Rust / Cargo compiler style:
-  -- "--> src/main.rs:45:12" or "--> src/main.rs:45"
+  -- "--> src/main.rs:45:12" or "--> src/main.rs:45" or "--> C:\project\src\main.rs:45:12"
   function(line)
-    local file, lnum, col = line:match("^%s*%-%-%>%s+([%w_%-./\\]+%.%w+):(%d+):?(%d*)")
+    local file, lnum, col = line:match("^%s*%-%-%>%s+([%a]:[/\\]?[%w_%-./\\]+%.%w+):(%d+):?(%d*)")
+    if not file then
+      file, lnum, col = line:match("^%s*%-%-%>%s+([%w_%-./\\]+%.%w+):(%d+):?(%d*)")
+    end
     if file and lnum then
       return {
         file = file,
@@ -230,6 +241,7 @@ local matchers = {
   -- 8. Generic fallback:
   -- matches path:line:col or path:line
   -- support paths with spaces, @, +, (), etc.
+  -- enforce that file extension begins with an alphabetical character to prevent matching timestamps
   function(line)
     -- Skip URLs early
     if line:match("https?://") or line:match("ftp://") then
@@ -239,27 +251,27 @@ local matchers = {
     local file, lnum, col
 
     -- 1. Try Windows path (e.g. C:\path\file.ext:line[:col]) without spaces
-    file, lnum, col = line:match("([%a]:[/\\][%w_%-./\\]+%.%w+):(%d+):?(%d*)")
+    file, lnum, col = line:match("([%a]:[/\\][%w_%-./\\]+%.%a%w*):(%d+):?(%d*)")
 
     -- 2. Standard clean path token without prefix words (e.g. "[ERROR] src/main.rs:45:12" -> "src/main.rs")
     if not file then
-      file, lnum, col = line:match("([%w_%-./\\]+%.%w+):(%d+):?(%d*)")
+      file, lnum, col = line:match("([%w_%-./\\]+%.%a%w*):(%d+):?(%d*)")
     end
 
     -- 3. Fallback for paths with spaces, @, +, (), anchored after whitespace/brackets/quotes
     if not file then
-      file, lnum, col = line:match("[%s%[\"'%(]([%a]:[/\\][^:\r\n\"'%[%]%(%)]+%.%w+):(%d+):?(%d*)")
+      file, lnum, col = line:match("[%s%[\"'%(]([%a]:[/\\][^:\r\n\"'%[%]%(%)]+%.%a%w*):(%d+):?(%d*)")
     end
     if not file then
-      file, lnum, col = line:match("[%s%[\"'%(]([^:\r\n\"'%[%]%(%)]+%.%w+):(%d+):?(%d*)")
+      file, lnum, col = line:match("[%s%[\"'%(]([^:\r\n\"'%[%]%(%)]+%.%a%w*):(%d+):?(%d*)")
     end
 
     -- 4. Start of line with path that might contain spaces/special characters
     if not file then
-      file, lnum, col = line:match("^%s*([%a]:[/\\][^:\r\n\"'%[%]%(%)]+%.%w+):(%d+):?(%d*)")
+      file, lnum, col = line:match("^%s*([%a]:[/\\][^:\r\n\"'%[%]%(%)]+%.%a%w*):(%d+):?(%d*)")
     end
     if not file then
-      file, lnum, col = line:match("^%s*([^:\r\n\"'%[%]%(%)]+%.%w+):(%d+):?(%d*)")
+      file, lnum, col = line:match("^%s*([^:\r\n\"'%[%]%(%)]+%.%a%w*):(%d+):?(%d*)")
     end
 
     if file and lnum then

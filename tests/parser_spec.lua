@@ -127,12 +127,39 @@ assert_eq(ruby_frames[3].method, "authenticate!", "ruby frame 3 method")
 assert_eq(ruby_frames[4].method, "<main>", "ruby frame 4 method")
 assert_eq(ruby_frames[5].method, "<top (required)>", "ruby frame 5 method")
 
+print("--> Testing Java inner classes, lambdas, and Kotlin coroutines in Matcher 2...")
+local java_inner = "    at com.example.Outer$Inner.run(Outer.java:42)"
+local java_inner_frames = parser.parse(java_inner)
+assert_eq(#java_inner_frames, 1, "java inner class parsed")
+assert_eq(java_inner_frames[1].file, "Outer.java", "java inner file")
+assert_eq(java_inner_frames[1].line, 42, "java inner line")
+assert_eq(java_inner_frames[1].method, "com.example.Outer$Inner.run", "java inner method")
+
+local java_lambda = "    at com.example.Service$$Lambda$1/0x000.run(Service.java:10)"
+local java_lambda_frames = parser.parse(java_lambda)
+assert_eq(#java_lambda_frames, 1, "java lambda parsed")
+assert_eq(java_lambda_frames[1].file, "Service.java", "java lambda file")
+assert_eq(java_lambda_frames[1].line, 10, "java lambda line")
+assert_eq(java_lambda_frames[1].method, "com.example.Service$$Lambda$1/0x000.run", "java lambda method")
+
+local kotlin_trace = "    at com.example.MainKt$main$1.invokeSuspend(Main.kt:15)"
+local kotlin_frames = parser.parse(kotlin_trace)
+assert_eq(#kotlin_frames, 1, "kotlin coroutine parsed")
+assert_eq(kotlin_frames[1].file, "Main.kt", "kotlin file")
+assert_eq(kotlin_frames[1].line, 15, "kotlin line")
+assert_eq(kotlin_frames[1].method, "com.example.MainKt$main$1.invokeSuspend", "kotlin method")
+
 print("--> Testing generic fallback & prefix word stripping...")
 local generic_text = "some/module/worker.go:99:4: something went wrong"
 local gen_frames = parser.parse(generic_text)
 assert_true(#gen_frames >= 1, "generic fallback frame parsed")
 assert_eq(gen_frames[1].line, 99, "generic line")
 assert_eq(gen_frames[1].col, 4, "generic col")
+
+-- Generic fallback should reject log timestamps like "2026-11-10 10:20:30.123:45"
+local timestamp_text = "2026-11-10 10:20:30.123:45 INFO server started"
+local timestamp_frames = parser.parse(timestamp_text)
+assert_eq(#timestamp_frames, 0, "log timestamp should not be parsed as a file:line frame")
 
 -- Generic matcher prefix word stripping
 local prefix_frames = parser.parse([[
@@ -148,6 +175,15 @@ assert_eq(prefix_frames[2].line, 10, "prefix frame 2 line")
 
 -- Windows drive letter support in Generic and Ruby matchers
 print("--> Testing Windows drive letter parsing...")
+-- Cargo compiler style with Windows path
+local win_cargo = "  --> C:\\project\\src\\main.rs:10:5"
+local win_cargo_frames = parser.parse(win_cargo)
+assert_eq(#win_cargo_frames, 1, "windows cargo frame parsed")
+assert_true(win_cargo_frames[1].file:find("src/main%.rs") ~= nil or win_cargo_frames[1].file:find("main%.rs") ~= nil, "windows cargo normalized")
+assert_eq(win_cargo_frames[1].line, 10, "windows cargo line")
+assert_eq(win_cargo_frames[1].col, 5, "windows cargo col")
+assert_eq(win_cargo_frames[1].method, "compiler", "windows cargo method must be compiler")
+
 local win_ruby = [[
 C:\project\app.rb:12:in `show'
 C:/project/helpers/util.rb:34:in 'format'
@@ -209,6 +245,7 @@ vim.api.nvim_buf_set_lines(test_buf, 0, -1, false, { "File \"test.py\", line 10,
 vim.api.nvim_buf_call(test_buf, function()
   vim.cmd("w")
 end)
+vim.wait(100, function() return submitted_text ~= nil end)
 assert_true(submitted_text ~= nil, "scratchpad on_submit was invoked via :w")
 assert_true(submitted_text:find("do_work") ~= nil, "scratchpad content correctly submitted")
 
@@ -261,6 +298,22 @@ unwind.toggle_filter()
 assert_true(not unwind.state.filter_enabled, "filter disabled")
 assert_eq(#unwind.state.files, 4, "all files restored after toggling filter off")
 
+-- Test out-of-workspace absolute paths filtering (e.g. /opt/package/lib.py)
+print("--> Testing out-of-workspace external path filtering...")
+local external_trace = string.format([[
+/opt/third_party/lib.py:42: in external_fn
+%s/src/app.py:10: in local_fn
+]], vim.fs.normalize(vim.fn.getcwd()))
+unwind.clear()
+unwind.ingest(external_trace)
+assert_eq(#unwind.state.files, 2, "2 files before filter")
+assert_true(unwind.state.files[1].is_vendor, "external absolute path /opt/... must be tagged vendor")
+assert_true(not unwind.state.files[2].is_vendor, "local path must not be tagged vendor")
+unwind.toggle_filter()
+assert_eq(#unwind.state.files, 1, "only 1 file after filter enabled")
+assert_true(unwind.state.files[1].file:find("src/app%.py") ~= nil, "local file kept")
+unwind.toggle_filter()
+
 print("--> Testing decorator formatting and global clear across buffers...")
 local decorator = require("unwind.decorator")
 local decor_buf1 = vim.api.nvim_create_buf(false, true)
@@ -299,25 +352,75 @@ assert_true(qflist[1].text:find("at do_foo") ~= nil, "quickfix method formatted"
 assert_eq(qflist[1].lnum, 10, "quickfix line 1")
 assert_eq(qflist[2].lnum, 25, "quickfix line 2")
 
-print("--> Testing ingest_range...")
+print("--> Testing ingest_range and active visual selection...")
 local range_buf = vim.api.nvim_create_buf(false, true)
 vim.api.nvim_buf_set_lines(range_buf, 0, -1, false, {
   "irrelevant line 1",
   'File "range_test.py", line 99, in test_fn',
   "irrelevant line 3",
 })
-vim.api.nvim_set_current_buf(range_buf)
+vim.api.nvim_win_set_buf(0, range_buf)
 unwind.clear()
 unwind.ingest_range(2, 2)
 assert_eq(#unwind.state.frames, 1, "ingest_range parsed frame")
 assert_eq(unwind.state.frames[1].line, 99, "ingest_range line")
 
 -- Test ingest_range with inverted arguments (line1 > line2)
-vim.api.nvim_set_current_buf(range_buf)
+vim.api.nvim_win_set_buf(0, range_buf)
 unwind.clear()
 unwind.ingest_range(3, 1)
 assert_eq(#unwind.state.frames, 1, "ingest_range with inverted bounds parsed frame")
 assert_eq(unwind.state.frames[1].line, 99, "ingest_range inverted line")
+
+-- Test ingest_selection while visual mode is active
+vim.api.nvim_win_set_buf(0, range_buf)
+unwind.clear()
+vim.cmd("normal! 2GV") -- select line 2 in visual line mode
+unwind.ingest_selection()
+assert_eq(#unwind.state.frames, 1, "ingest_selection from active visual mode parsed frame")
+assert_eq(unwind.state.frames[1].line, 99, "ingest_selection active visual mode line")
+
+print("--> Testing setup ignore_patterns array replacement...")
+unwind.setup({ ignore_patterns = { "custom_only/" } })
+assert_eq(#unwind.config.ignore_patterns, 1, "setup should replace ignore_patterns array completely")
+assert_eq(unwind.config.ignore_patterns[1], "custom_only/", "custom pattern set")
+-- Restore default ignore patterns
+unwind.setup({
+  ignore_patterns = {
+    "shared/bundle/",
+    "vendor/bundle/",
+    "/gems/",
+    "node_modules/",
+    "^/usr/",
+  },
+})
+
+print("--> Testing jump_to_frame cursor column clamping and existing buffer reuse...")
+local nav_buf = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_name(nav_buf, vim.fs.normalize(vim.fn.getcwd()) .. "/tests/fixtures/dummy.txt")
+vim.api.nvim_buf_set_lines(nav_buf, 0, -1, false, { "hi" }) -- 2 characters long
+vim.api.nvim_win_set_buf(0, nav_buf)
+unwind.state.frames = {
+  { file = "tests/fixtures/dummy.txt", line = 1, col = 50, method = "test_col" },
+}
+unwind.state.files = {
+  { file = "tests/fixtures/dummy.txt", primary_line = 1, primary_col = 50, primary_method = "test_col", total_frames = 1 },
+}
+unwind.jump_to_frame(1)
+local cur_pos = vim.api.nvim_win_get_cursor(0)
+assert_eq(cur_pos[1], 1, "jump_to_frame moved to line 1")
+assert_true(cur_pos[2] <= 1, "cursor column clamped to line length (expected <= 1, got " .. cur_pos[2] .. ")")
+
+-- Test 1-line range command in plugin/unwind.lua
+print("--> Testing 1-line range command...")
+-- Load plugin commands if not yet sourced
+pcall(vim.cmd, "source plugin/unwind.lua")
+require("unwind").clear()
+-- Trigger UnwindSelection on line 1 of nav_buf
+vim.api.nvim_buf_set_lines(nav_buf, 0, -1, false, { 'File "single_range.py", line 77, in single_fn' })
+vim.cmd("1UnwindSelection")
+assert_eq(#unwind.state.frames, 1, "1-line range command parsed frame")
+assert_eq(unwind.state.frames[1].line, 77, "1-line range line 77")
 
 print("--> Testing floating file menu wrap setting...")
 unwind.clear()

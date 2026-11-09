@@ -41,6 +41,11 @@ M.config = {
 --- Setup unwind plugin options
 ---@param opts? table
 function M.setup(opts)
+  opts = opts or {}
+  if opts.ignore_patterns then
+    M.config.ignore_patterns = opts.ignore_patterns
+    opts.ignore_patterns = nil
+  end
   M.config = vim.tbl_deep_extend("force", M.config, opts or {})
 
   if M.config.keymaps then
@@ -109,14 +114,25 @@ function M.jump_to_frame(idx)
   M.state.active_index = idx
   local frame = M.state.frames[idx]
 
-  -- Open the target file
-  local ok, err = pcall(function()
-    vim.cmd.edit(vim.fn.fnameescape(frame.file))
-  end)
+  -- Open the target file or switch to existing loaded buffer
+  local target_path = vim.fs.normalize(frame.file)
+  local current_path = vim.fs.normalize(vim.api.nvim_buf_get_name(0))
 
-  if not ok then
-    vim.notify("Unwind: Could not open file " .. tostring(frame.file) .. ": " .. tostring(err), vim.log.levels.ERROR)
-    return
+  if target_path ~= current_path then
+    local target_full = vim.fs.normalize(vim.fn.fnamemodify(frame.file, ":p"))
+    local existing_buf = vim.fn.bufnr(target_path)
+    if existing_buf == -1 then
+      existing_buf = vim.fn.bufnr(target_full)
+    end
+    if existing_buf ~= -1 and vim.api.nvim_buf_is_valid(existing_buf) and vim.api.nvim_buf_is_loaded(existing_buf) then
+      vim.api.nvim_set_current_buf(existing_buf)
+    else
+      local ok, err = pcall(vim.cmd.edit, vim.fn.fnameescape(frame.file))
+      if not ok then
+        vim.notify("Unwind: Could not open file " .. tostring(frame.file) .. ": " .. tostring(err), vim.log.levels.ERROR)
+        return
+      end
+    end
   end
 
   local bufnr = vim.api.nvim_get_current_buf()
@@ -124,8 +140,12 @@ function M.jump_to_frame(idx)
   local target_line = math.max(1, math.min(frame.line or 1, line_count))
   local target_col = math.max(0, (frame.col or 1) - 1)
 
-  -- Move cursor to target line and column
-  pcall(vim.api.nvim_win_set_cursor, 0, { target_line, target_col })
+  local line_str = vim.api.nvim_buf_get_lines(bufnr, target_line - 1, target_line, false)[1] or ""
+  local max_col = math.max(0, #line_str - 1)
+  local clamped_col = math.min(target_col, max_col)
+  if not pcall(vim.api.nvim_win_set_cursor, 0, { target_line, clamped_col }) then
+    pcall(vim.api.nvim_win_set_cursor, 0, { target_line, 0 })
+  end
 
   -- Update active_file_index matching this frame's file
   for f_idx, f_entry in ipairs(M.state.files) do
@@ -313,14 +333,19 @@ end
 
 --- Ingest stacktrace from visual selection range
 function M.ingest_selection()
-  -- Get visual selection range
+  -- Exit visual mode to populate '< and '> marks
+  local mode = vim.fn.mode()
+  if mode:find("[vV\22]") then
+    vim.cmd([[execute "normal! \<ESC>"]])
+  end
+
   local start_pos = vim.fn.getpos("'<")
   local end_pos = vim.fn.getpos("'>")
+  local s_buf, s_row = start_pos[1], start_pos[2]
+  local e_buf, e_row = end_pos[1], end_pos[2]
 
-  local s_row = start_pos[2]
-  local e_row = end_pos[2]
-
-  if s_row == 0 or e_row == 0 then
+  local cur_buf = vim.api.nvim_get_current_buf()
+  if s_row == 0 or e_row == 0 or (s_buf ~= 0 and s_buf ~= cur_buf) then
     vim.notify("Unwind: No visual selection found.", vim.log.levels.WARN)
     return
   end
@@ -368,8 +393,15 @@ function M.ingest_file(filepath)
     return
   end
 
-  local content = f:read("*all")
+  local ok, content = pcall(function()
+    return f:read("*all")
+  end)
   f:close()
+
+  if not ok then
+    vim.notify("Unwind: Error reading file " .. tostring(expanded_path) .. ": " .. tostring(content), vim.log.levels.ERROR)
+    return
+  end
 
   if not content or content == "" then
     vim.notify("Unwind: File is empty: " .. tostring(expanded_path), vim.log.levels.WARN)
@@ -405,24 +437,8 @@ function M.menu()
     return
   end
 
-  ui.open(M.state.files, function(file_entry)
-    -- Find the first frame corresponding to this file
-    for idx, frame in ipairs(M.state.frames) do
-      if frame.file == file_entry.file and frame.line == file_entry.primary_line then
-        M.jump_to_frame(idx)
-        return
-      end
-    end
-
-    -- Fallback to opening file directly at primary line
-    pcall(function()
-      vim.cmd.edit(vim.fn.fnameescape(file_entry.file))
-      local bufnr = vim.api.nvim_get_current_buf()
-      local line_count = vim.api.nvim_buf_line_count(bufnr)
-      local target_line = math.max(1, math.min(file_entry.primary_line or 1, line_count))
-      vim.api.nvim_win_set_cursor(0, { target_line, (file_entry.primary_col or 1) - 1 })
-      decorator.render(bufnr, target_line, 1, file_entry.primary_method, file_entry.file)
-    end)
+  ui.open(M.state.files, function(_, idx)
+    M.jump_to_file(idx)
   end)
 end
 

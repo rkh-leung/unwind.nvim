@@ -12,7 +12,7 @@ vim.api.nvim_create_user_command("UnwindClipboard", function()
 end, { desc = "Ingest stacktrace from clipboard" })
 
 vim.api.nvim_create_user_command("UnwindSelection", function(opts)
-  if opts.range == 2 then
+  if opts.range and opts.range > 0 then
     require("unwind").ingest_range(opts.line1, opts.line2)
   else
     require("unwind").ingest_selection()
