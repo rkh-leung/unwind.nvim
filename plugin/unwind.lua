@@ -6,56 +6,59 @@ if vim.g.loaded_unwind == 1 then
 end
 vim.g.loaded_unwind = 1
 
-local unwind = require("unwind")
-
--- User Commands
+-- User Commands (using inline require("unwind") calls to preserve lazy loading)
 vim.api.nvim_create_user_command("UnwindClipboard", function()
-  unwind.ingest_clipboard()
+  require("unwind").ingest_clipboard()
 end, { desc = "Ingest stacktrace from clipboard" })
 
-vim.api.nvim_create_user_command("UnwindSelection", function()
-  unwind.ingest_selection()
+vim.api.nvim_create_user_command("UnwindSelection", function(opts)
+  if opts.range == 2 then
+    require("unwind").ingest_range(opts.line1, opts.line2)
+  else
+    require("unwind").ingest_selection()
+  end
 end, { range = true, desc = "Ingest stacktrace from visual selection" })
 
 vim.api.nvim_create_user_command("UnwindFile", function(opts)
-  unwind.ingest_file(opts.args)
+  require("unwind").ingest_file(opts.args)
 end, { nargs = 1, complete = "file", desc = "Ingest stacktrace from file" })
 
 vim.api.nvim_create_user_command("UnwindInput", function()
-  unwind.open_input()
+  require("unwind").open_input()
 end, { desc = "Open interactive input buffer to paste/type stacktrace" })
 
 vim.api.nvim_create_user_command("Unwind", function(opts)
-  unwind.unwind(opts.args)
+  require("unwind").unwind(opts.args)
 end, { nargs = "?", complete = "file", desc = "Ingest stacktrace from file or open interactive input window" })
 
 vim.api.nvim_create_user_command("UnwindMenu", function()
-  unwind.menu()
+  require("unwind").menu()
 end, { desc = "Toggle Harpoon-style floating menu" })
 
 vim.api.nvim_create_user_command("UnwindNext", function()
-  unwind.next()
+  require("unwind").next()
 end, { desc = "Jump to next stack frame" })
 
 vim.api.nvim_create_user_command("UnwindPrev", function()
-  unwind.prev()
+  require("unwind").prev()
 end, { desc = "Jump to previous stack frame" })
 
 vim.api.nvim_create_user_command("UnwindNextFile", function()
-  unwind.next_file()
+  require("unwind").next_file()
 end, { desc = "Jump to next stacktrace file" })
 
 vim.api.nvim_create_user_command("UnwindPrevFile", function()
-  unwind.prev_file()
+  require("unwind").prev_file()
 end, { desc = "Jump to previous stacktrace file" })
 
 vim.api.nvim_create_user_command("UnwindToggleFilter", function()
-  unwind.toggle_filter()
+  require("unwind").toggle_filter()
 end, { desc = "Toggle filtering out vendor and external library files" })
 
-vim.api.nvim_create_user_command("UnwindClear", function()
-  unwind.clear()
-end, { desc = "Clear active decorations and state" })
+vim.api.nvim_create_user_command("UnwindQuickfix", function()
+  require("unwind").quickfix()
+end, { desc = "Export active stacktrace frames to Neovim's quickfix list" })
 
--- Setup default keymaps if user hasn't explicitly disabled them
-unwind.setup()
+vim.api.nvim_create_user_command("UnwindClear", function()
+  require("unwind").clear()
+end, { desc = "Clear active decorations and state" })

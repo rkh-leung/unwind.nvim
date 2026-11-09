@@ -189,6 +189,7 @@ require("unwind").setup({
 | `:UnwindNextFile` | Jumps directly to next unique file at primary fault line |
 | `:UnwindPrevFile` | Jumps directly to previous unique file at primary fault line |
 | `:UnwindToggleFilter` | Toggles filtering out vendor / third-party library files |
+| `:UnwindQuickfix` | Exports active stacktrace frames to Neovim's quickfix list |
 | `:UnwindClear` | Clears active decorations, highlights, and state |
 
 ---

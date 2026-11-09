@@ -68,11 +68,50 @@ Traceback (most recent call last):
     response = handler()
   File "lib/handler.py", line 12, in handler
     raise ValueError("invalid")
+  File "script.py", line 1, in <module>
+    items = [x for x in range(10)]
+  File "script.py", line 2, in <listcomp>
+    x = lambda y: y + 1
+  File "script.py", line 3, in <lambda>
+    pass
 ]]
 local py_frames = parser.parse(python_text)
-assert_eq(#py_frames, 2, "python frames count")
+assert_eq(#py_frames, 5, "python frames count including <module>, <listcomp>, <lambda>")
 assert_eq(py_frames[1].line, 45, "python frame 1 line")
 assert_eq(py_frames[1].method, "execute_request", "python frame 1 method")
+assert_eq(py_frames[3].method, "<module>", "python frame 3 method <module>")
+assert_eq(py_frames[4].method, "<listcomp>", "python frame 4 method <listcomp>")
+assert_eq(py_frames[5].method, "<lambda>", "python frame 5 method <lambda>")
+
+print("--> Testing path normalization & modern paths with @, +, (), spaces...")
+-- Scoped packages with @
+local scoped_line = "    at Object.run (/app/node_modules/@prisma/client/runtime.js:12:34)"
+local scoped_frame = parser.parse(scoped_line)
+assert_eq(#scoped_frame, 1, "scoped package parsed")
+assert_true(scoped_frame[1].file:find("@prisma") ~= nil, "scoped path preserved")
+assert_eq(scoped_frame[1].line, 12, "scoped line")
+assert_eq(scoped_frame[1].col, 34, "scoped col")
+
+-- Next.js route groups with () and +
+local route_line = "    at Page (/app/src/app/(auth)/login/+page.svelte:42:8)"
+local route_frame = parser.parse(route_line)
+assert_eq(#route_frame, 1, "route group parsed")
+assert_true(route_frame[1].file:find("%(auth%)") ~= nil, "route group parentheses preserved")
+assert_true(route_frame[1].file:find("%+page") ~= nil, "route group + preserved")
+assert_eq(route_frame[1].line, 42, "route line")
+
+-- Paths with spaces
+local space_line = "    at /Users/Jane Doe/dev/project/main.go:50:10"
+local space_frame = parser.parse(space_line)
+assert_eq(#space_frame, 1, "path with spaces parsed")
+assert_true(space_frame[1].file:find("Jane Doe") ~= nil, "spaces preserved in path")
+assert_eq(space_frame[1].line, 50, "space path line")
+
+-- Relativizing cwd-prefixed path
+local cwd = vim.fn.getcwd():gsub("\\", "/")
+local abs_cwd_path = cwd .. "/lua/unwind/parser.lua"
+local rel_norm = parser.normalize_path(abs_cwd_path)
+assert_eq(rel_norm, "lua/unwind/parser.lua", "normalize_path should relativize cwd path")
 
 print("--> Testing Ruby stacktrace parsing...")
 local ruby_text = read_fixture("tests/fixtures/ruby_trace.txt")
@@ -125,18 +164,19 @@ end)
 local bufs = vim.api.nvim_list_bufs()
 local test_buf = nil
 for _, b in ipairs(bufs) do
-  if vim.bo[b].buftype == "nofile" and vim.bo[b].bufhidden == "wipe" then
+  if vim.bo[b].buftype == "acwrite" and vim.bo[b].bufhidden == "wipe" then
     test_buf = b
     break
   end
 end
 assert_true(test_buf ~= nil, "input buffer created")
+assert_true(vim.api.nvim_buf_get_name(test_buf):find("unwind://input") ~= nil, "input buffer named unwind://input")
 vim.api.nvim_buf_set_lines(test_buf, 0, -1, false, { "File \"test.py\", line 10, in do_work" })
--- Trigger the submit command
+-- Trigger the submit command via :w and verify no E32
 vim.api.nvim_buf_call(test_buf, function()
-  vim.cmd("Write")
+  vim.cmd("w")
 end)
-assert_true(submitted_text ~= nil, "scratchpad on_submit was invoked")
+assert_true(submitted_text ~= nil, "scratchpad on_submit was invoked via :w")
 assert_true(submitted_text:find("do_work") ~= nil, "scratchpad content correctly submitted")
 
 print("--> Testing vendor filtering and file navigation...")
@@ -179,16 +219,55 @@ unwind.toggle_filter()
 assert_true(not unwind.state.filter_enabled, "filter disabled")
 assert_eq(#unwind.state.files, 4, "all files restored after toggling filter off")
 
-print("--> Testing decorator formatting without anonymous()...")
+print("--> Testing decorator formatting and global clear across buffers...")
 local decorator = require("unwind.decorator")
-local decor_buf = vim.api.nvim_create_buf(false, true)
-vim.api.nvim_buf_set_lines(decor_buf, 0, -1, false, { "line 1", "line 2" })
-local ext_id = decorator.render(decor_buf, 1, 1, "", "core/test.rb", 5)
-assert_true(ext_id ~= nil, "decorator extmark rendered")
-local extmarks = vim.api.nvim_buf_get_extmarks(decor_buf, decorator.get_namespace(), 0, -1, { details = true })
-assert_true(#extmarks > 0, "extmarks exist in buffer")
-local header = extmarks[1][4].virt_lines[1][1][1]
+local decor_buf1 = vim.api.nvim_create_buf(false, true)
+local decor_buf2 = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_lines(decor_buf1, 0, -1, false, { "line 1", "line 2" })
+vim.api.nvim_buf_set_lines(decor_buf2, 0, -1, false, { "line 1", "line 2" })
+
+local ext_id1 = decorator.render(decor_buf1, 1, 1, "", "core/test.rb", 5)
+assert_true(ext_id1 ~= nil, "decorator extmark rendered in buf 1")
+local extmarks1 = vim.api.nvim_buf_get_extmarks(decor_buf1, decorator.get_namespace(), 0, -1, { details = true })
+assert_true(#extmarks1 > 0, "extmarks exist in buffer 1")
+local header = extmarks1[1][4].virt_lines[1][1][1]
 assert_true(header:find("anonymous") == nil, "header should not contain anonymous, got: " .. header)
 assert_true(header:find("Frame #1/5") ~= nil, "header should contain Frame #1/5, got: " .. header)
+
+-- Rendering in buf 2 must globally clear buf 1's extmarks
+local ext_id2 = decorator.render(decor_buf2, 1, 2, "process", "core/other.rb", 5)
+assert_true(ext_id2 ~= nil, "decorator extmark rendered in buf 2")
+local extmarks1_after = vim.api.nvim_buf_get_extmarks(decor_buf1, decorator.get_namespace(), 0, -1, {})
+assert_eq(#extmarks1_after, 0, "buffer 1 extmarks should be cleared when rendering in buffer 2")
+local extmarks2 = vim.api.nvim_buf_get_extmarks(decor_buf2, decorator.get_namespace(), 0, -1, {})
+assert_true(#extmarks2 > 0, "buffer 2 extmarks should exist")
+
+print("--> Testing quickfix export...")
+unwind.clear()
+unwind.ingest([[
+  File "app/main.py", line 10, in do_foo
+    call_bar()
+  File "app/utils.py", line 25, in call_bar
+    crash()
+]])
+unwind.quickfix()
+local qflist = vim.fn.getqflist()
+assert_eq(#qflist, 2, "quickfix items count")
+assert_true(qflist[1].text:find("at do_foo") ~= nil, "quickfix method formatted")
+assert_eq(qflist[1].lnum, 10, "quickfix line 1")
+assert_eq(qflist[2].lnum, 25, "quickfix line 2")
+
+print("--> Testing ingest_range...")
+local range_buf = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_lines(range_buf, 0, -1, false, {
+  "irrelevant line 1",
+  'File "range_test.py", line 99, in test_fn',
+  "irrelevant line 3",
+})
+vim.api.nvim_set_current_buf(range_buf)
+unwind.clear()
+unwind.ingest_range(2, 2)
+assert_eq(#unwind.state.frames, 1, "ingest_range parsed frame")
+assert_eq(unwind.state.frames[1].line, 99, "ingest_range line")
 
 print("All parser, collector & integration unit tests PASSED successfully!")

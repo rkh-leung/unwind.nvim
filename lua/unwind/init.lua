@@ -301,36 +301,56 @@ function M.ingest_clipboard()
   M.ingest(text)
 end
 
+--- Ingest stacktrace from a 1-indexed line range (e.g. from visual selection / user command)
+---@param line1 number
+---@param line2 number
+function M.ingest_range(line1, line2)
+  local bufnr = vim.api.nvim_get_current_buf()
+  local lines = vim.api.nvim_buf_get_lines(bufnr, line1 - 1, line2, false)
+  M.ingest(table.concat(lines, "\n"))
+end
+
 --- Ingest stacktrace from visual selection range
 function M.ingest_selection()
   -- Get visual selection range
   local start_pos = vim.fn.getpos("'<")
   local end_pos = vim.fn.getpos("'>")
 
-  local s_row, s_col = start_pos[2], start_pos[3]
-  local e_row, e_col = end_pos[2], end_pos[3]
+  local s_row = start_pos[2]
+  local e_row = end_pos[2]
 
   if s_row == 0 or e_row == 0 then
     vim.notify("Unwind: No visual selection found.", vim.log.levels.WARN)
     return
   end
 
-  local bufnr = vim.api.nvim_get_current_buf()
-  local lines = vim.api.nvim_buf_get_lines(bufnr, s_row - 1, e_row, false)
-  if #lines == 0 then
+  if s_row > e_row then
+    s_row, e_row = e_row, s_row
+  end
+
+  M.ingest_range(s_row, e_row)
+end
+
+--- Export active stacktrace frames to Neovim's quickfix list
+function M.quickfix()
+  if #M.state.frames == 0 then
+    vim.notify("Unwind: No active frames to export.", vim.log.levels.WARN)
     return
   end
 
-  -- Truncate first and last lines based on column positions
-  if #lines == 1 then
-    lines[1] = string.sub(lines[1], s_col, e_col)
-  else
-    lines[1] = string.sub(lines[1], s_col)
-    lines[#lines] = string.sub(lines[#lines], 1, e_col)
+  local qf_items = {}
+  for _, frame in ipairs(M.state.frames) do
+    table.insert(qf_items, {
+      filename = frame.file,
+      lnum = frame.line,
+      col = frame.col or 1,
+      text = frame.method ~= "" and ("at " .. frame.method) or frame.raw_line,
+    })
   end
 
-  local text = table.concat(lines, "\n")
-  M.ingest(text)
+  vim.fn.setqflist(qf_items, "r")
+  vim.fn.setqflist({}, "a", { title = "Unwind Stacktrace" })
+  vim.cmd("copen")
 end
 
 --- Ingest stacktrace from a file path
