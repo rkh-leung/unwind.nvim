@@ -13,19 +13,59 @@ local input_source_win = nil
 local input_session_id = 0
 
 --- Close the floating menu if open
-function M.close()
+--- Return whether the specified or current window is a floating window
+---@param win? number
+---@return boolean
+function M.is_floating(win)
+  win = win or vim.api.nvim_get_current_win()
+  if not win or not vim.api.nvim_win_is_valid(win) then
+    return false
+  end
+  local config = vim.api.nvim_win_get_config(win)
+  return config.relative ~= nil and config.relative ~= ""
+end
+
+--- Ensures navigation runs inside a proper source window, closing or switching out of any active float
+function M.ensure_source_window()
+  local cur_win = vim.api.nvim_get_current_win()
   if active_win and vim.api.nvim_win_is_valid(active_win) then
-    vim.api.nvim_win_close(active_win, true)
+    M.close()
   end
-  if active_buf and vim.api.nvim_buf_is_valid(active_buf) then
-    pcall(vim.api.nvim_buf_delete, active_buf, { force = true })
+  if input_win and vim.api.nvim_win_is_valid(input_win) then
+    M.close_input()
   end
-  if menu_source_win and vim.api.nvim_win_is_valid(menu_source_win) then
-    pcall(vim.api.nvim_set_current_win, menu_source_win)
+
+  cur_win = vim.api.nvim_get_current_win()
+  if M.is_floating(cur_win) then
+    -- Find a valid non-floating window
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      if vim.api.nvim_win_is_valid(win) and not M.is_floating(win) then
+        pcall(vim.api.nvim_set_current_win, win)
+        return
+      end
+    end
   end
+end
+
+--- Close the floating menu if open
+function M.close()
+  local win = active_win
+  local buf = active_buf
+  local src_win = menu_source_win
+
   active_win = nil
   active_buf = nil
   menu_source_win = nil
+
+  if win and vim.api.nvim_win_is_valid(win) then
+    vim.api.nvim_win_close(win, true)
+  end
+  if buf and vim.api.nvim_buf_is_valid(buf) then
+    pcall(vim.api.nvim_buf_delete, buf, { force = true })
+  end
+  if src_win and vim.api.nvim_win_is_valid(src_win) and not M.is_floating(src_win) then
+    pcall(vim.api.nvim_set_current_win, src_win)
+  end
 end
 
 --- Close the input floating window if open
@@ -33,18 +73,23 @@ function M.close_input()
   -- Invalidate any pending scheduled submit callback from this session
   input_session_id = input_session_id + 1
 
-  if input_win and vim.api.nvim_win_is_valid(input_win) then
-    vim.api.nvim_win_close(input_win, true)
-  end
-  if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
-    pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
-  end
-  if input_source_win and vim.api.nvim_win_is_valid(input_source_win) then
-    pcall(vim.api.nvim_set_current_win, input_source_win)
-  end
+  local win = input_win
+  local buf = input_buf
+  local src_win = input_source_win
+
   input_win = nil
   input_buf = nil
   input_source_win = nil
+
+  if win and vim.api.nvim_win_is_valid(win) then
+    vim.api.nvim_win_close(win, true)
+  end
+  if buf and vim.api.nvim_buf_is_valid(buf) then
+    pcall(vim.api.nvim_buf_delete, buf, { force = true })
+  end
+  if src_win and vim.api.nvim_win_is_valid(src_win) and not M.is_floating(src_win) then
+    pcall(vim.api.nvim_set_current_win, src_win)
+  end
 end
 
 --- Toggles or opens the floating menu displaying unique files
@@ -62,6 +107,15 @@ function M.open(files, on_select)
     return
   end
 
+  -- Calculate centered floating window dimensions first before creating buffer
+  local editor_width = vim.o.columns
+  local editor_height = vim.o.lines
+
+  if editor_width < 10 or editor_height < 5 then
+    vim.notify("Unwind: Terminal window is too small to display menu.", vim.log.levels.WARN)
+    return
+  end
+
   -- Create scratch buffer
   local buf = vim.api.nvim_create_buf(false, true)
   active_buf = buf
@@ -71,15 +125,6 @@ function M.open(files, on_select)
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].swapfile = false
   vim.bo[buf].buflisted = false
-
-  -- Calculate centered floating window dimensions first
-  local editor_width = vim.o.columns
-  local editor_height = vim.o.lines
-
-  if editor_width < 10 or editor_height < 5 then
-    vim.notify("Unwind: Terminal window is too small to display menu.", vim.log.levels.WARN)
-    return
-  end
 
   local max_file_len = 0
   for _, item in ipairs(files) do
@@ -154,7 +199,17 @@ function M.open(files, on_select)
   -- Capture the originating source window before opening float
   menu_source_win = vim.api.nvim_get_current_win()
 
-  local win = vim.api.nvim_open_win(buf, true, win_opts)
+  local ok_win, win = pcall(vim.api.nvim_open_win, buf, true, win_opts)
+  if not ok_win or not win or not vim.api.nvim_win_is_valid(win) then
+    if buf and vim.api.nvim_buf_is_valid(buf) then
+      pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    end
+    active_buf = nil
+    active_win = nil
+    menu_source_win = nil
+    vim.notify("Unwind: Could not open floating window.", vim.log.levels.WARN)
+    return
+  end
   active_win = win
 
   vim.wo[win].cursorline = true
@@ -224,6 +279,14 @@ function M.open_input(on_submit)
   input_session_id = input_session_id + 1
   local current_session = input_session_id
 
+  local editor_width = vim.o.columns
+  local editor_height = vim.o.lines
+
+  if editor_width < 10 or editor_height < 5 then
+    vim.notify("Unwind: Terminal window is too small to display input window.", vim.log.levels.WARN)
+    return
+  end
+
   local buf = vim.api.nvim_create_buf(false, true)
   input_buf = buf
 
@@ -232,14 +295,6 @@ function M.open_input(on_submit)
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].swapfile = false
   vim.bo[buf].buflisted = false
-
-  local editor_width = vim.o.columns
-  local editor_height = vim.o.lines
-
-  if editor_width < 10 or editor_height < 5 then
-    vim.notify("Unwind: Terminal window is too small to display input window.", vim.log.levels.WARN)
-    return
-  end
 
   local max_w = math.max(1, editor_width - 4)
   local max_h = math.max(1, editor_height - 4)
@@ -262,7 +317,17 @@ function M.open_input(on_submit)
 
   input_source_win = vim.api.nvim_get_current_win()
 
-  local win = vim.api.nvim_open_win(buf, true, win_opts)
+  local ok_win, win = pcall(vim.api.nvim_open_win, buf, true, win_opts)
+  if not ok_win or not win or not vim.api.nvim_win_is_valid(win) then
+    if buf and vim.api.nvim_buf_is_valid(buf) then
+      pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    end
+    input_buf = nil
+    input_win = nil
+    input_source_win = nil
+    vim.notify("Unwind: Could not open floating input window.", vim.log.levels.WARN)
+    return
+  end
   input_win = win
 
   vim.wo[win].winhighlight = "Normal:NormalFloat,FloatBorder:FloatBorder,CursorLine:PmenuSel"

@@ -750,35 +750,162 @@ do
   ui.open_input(function(_)
     submitted = true
   end)
-  -- Immediately cancel/close input
+
+  -- Find input buffer
+  local bufs = vim.api.nvim_list_bufs()
+  local in_buf = nil
+  for _, b in ipairs(bufs) do
+    if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find("unwind://input") then
+      in_buf = b
+      break
+    end
+  end
+  assert_true(in_buf ~= nil, "input buffer found")
+
+  -- Trigger submit via :w then immediately close_input() before vim.schedule executes callback
+  vim.api.nvim_buf_call(in_buf, function()
+    vim.cmd("w")
+  end)
   ui.close_input()
-  -- Wait to ensure any scheduled callback would have run
+
   vim.wait(50, function() return false end)
   assert_true(not submitted, "scheduled callback must not run after close_input()")
 end
 
-print("--> [Regression] Small terminal dimensions do not crash ui.open / ui.open_input...")
+print("--> [Regression] Small terminal dimensions do not crash ui.open / ui.open_input and leak no buffers...")
 do
   local ui = require("unwind.ui")
   local orig_cols = vim.o.columns
   local orig_lines = vim.o.lines
 
-  -- Neovim minimum terminal dimensions: columns >= 12, lines >= 5
-  vim.o.columns = 12
-  vim.o.lines = 5
+  local orig_laststatus = vim.o.laststatus
+  vim.o.laststatus = 0
+  vim.o.lines = 4
+
+  local bufs_before = #vim.api.nvim_list_bufs()
 
   local ok_open = pcall(function()
     ui.open({ { file = "test.lua", total_frames = 1 } }, function() end)
   end)
   assert_true(ok_open, "ui.open should not throw on small terminal")
+  local bufs_after_menu = #vim.api.nvim_list_bufs()
+  assert_eq(bufs_after_menu, bufs_before, "ui.open must not leak scratch buffer on small terminal early return")
 
   local ok_input = pcall(function()
     ui.open_input(function() end)
   end)
   assert_true(ok_input, "ui.open_input should not throw on small terminal")
+  local bufs_after_input = #vim.api.nvim_list_bufs()
+  assert_eq(bufs_after_input, bufs_before, "ui.open_input must not leak scratch buffer on small terminal early return")
 
   vim.o.columns = orig_cols
   vim.o.lines = orig_lines
+  vim.o.laststatus = orig_laststatus
+end
+
+print("--> [New Invariants] Project root pinning and :cd cwd invariance...")
+do
+  unwind.clear()
+  local dummy_path = "tests/fixtures/dummy.txt"
+  local trace = 'File "' .. dummy_path .. '", line 1, in test_fn\n'
+  unwind.ingest(trace)
+  assert_true(unwind.state.root ~= nil, "state.root must be pinned")
+
+  -- Change Neovim cwd to a different subdirectory
+  local orig_cwd = vim.fn.getcwd()
+  vim.cmd("cd tests")
+
+  -- Navigation should still resolve relative to pinned state.root
+  local nav_ok = unwind.jump_to_frame(1)
+  assert_true(nav_ok, "jump_to_frame should succeed even after :cd because root was pinned")
+  assert_eq(unwind.state.active_index, 1, "active_index is 1")
+
+  -- Return to original cwd
+  vim.cmd("cd " .. vim.fn.fnameescape(orig_cwd))
+  unwind.clear()
+end
+
+print("--> [New Invariants] Non-trapping navigation skipping missing frames...")
+do
+  unwind.clear()
+  -- Stacktrace with:
+  -- frame 1: missing
+  -- frame 2: valid (tests/fixtures/dummy.txt)
+  -- frame 3: missing
+  local mixed_trace = [[
+  File "missing_one.py", line 10, in f1
+  File "tests/fixtures/dummy.txt", line 1, in f2
+  File "missing_two.py", line 20, in f3
+]]
+  unwind.ingest(mixed_trace)
+  -- Ingestion attempts M.next() which skips frame 1 and successfully lands on frame 2!
+  assert_eq(unwind.state.active_index, 2, "navigation should automatically skip missing frame 1 and land on frame 2")
+
+  -- Calling next() again should wrap and land back on frame 2 (skipping frame 3 and frame 1)
+  unwind.next()
+  assert_eq(unwind.state.active_index, 2, "next() skips missing frames and lands on the next valid frame")
+  unwind.clear()
+end
+
+print("--> [New Invariants] Floating menu window isolation during navigation...")
+do
+  unwind.clear()
+  unwind.ingest('File "tests/fixtures/dummy.txt", line 1, in f1')
+  -- Open menu float
+  unwind.menu()
+  -- Current window is the floating menu
+  assert_true(ui.is_floating(0), "current window is float")
+
+  -- Pressing next() while inside float should NOT turn the float into a source window
+  local wins_before = #vim.api.nvim_list_wins()
+  unwind.next()
+  -- Float must have been closed or replaced with source window
+  assert_true(not ui.is_floating(0), "navigation moved to source window")
+  local cur_buf = vim.api.nvim_get_current_buf()
+  assert_true(vim.api.nvim_buf_get_name(cur_buf):find("dummy%.txt") ~= nil, "source buffer loaded in normal window")
+  unwind.clear()
+end
+
+print("--> [New Invariants] Python indented source lines containing 'file:line' are not treated as frames...")
+do
+  local py_code_trace = [[
+Traceback (most recent call last):
+  File "outer.py", line 10, in outer
+    value = "src/config.py:123"
+  File "inner.py", line 20, in inner
+    crash()
+RuntimeError: boom
+]]
+  local frames = parser.parse(py_code_trace)
+  assert_eq(#frames, 2, "only 2 python frames should be parsed; src/config.py:123 source line must be ignored")
+  assert_eq(frames[1].file, "inner.py", "frame 1 is inner.py (innermost)")
+  assert_eq(frames[2].file, "outer.py", "frame 2 is outer.py (outermost)")
+end
+
+print("--> [New Invariants] Non-file pseudo-paths classification (<frozen ...>, node:, file://)...")
+do
+  local pseudo_trace = [[
+    at Object.<anonymous> (node:internal/process/task_queues:95:5)
+  File "<frozen importlib._bootstrap>", line 1000, in _find_and_load
+  File "<string>", line 1, in <module>
+    at run (file:///app/src/index.js:10:20)
+]]
+  local frames = parser.parse(pseudo_trace)
+  assert_eq(#frames, 4, "parsed 4 frames")
+  for _, f in ipairs(frames) do
+    assert_true(not f.navigable, "pseudo frame " .. f.file .. " must be marked non-navigable")
+  end
+end
+
+print("--> [New Invariants] Canonical path deduplication (./src/foo.lua vs src/foo.lua)...")
+do
+  local rel_frames = {
+    { file = "./tests/fixtures/dummy.txt", resolved_path = "tests/fixtures/dummy.txt", line = 1, col = 1, method = "m1" },
+    { file = "tests/fixtures/dummy.txt", resolved_path = "tests/fixtures/dummy.txt", line = 1, col = 1, method = "m2" },
+  }
+  local res = collector.collect(rel_frames)
+  assert_eq(#res.files, 1, "lexically equivalent paths must be deduplicated into 1 file entry")
+  assert_eq(res.files[1].total_frames, 2, "total frames count is 2")
 end
 
 print("All parser, collector & integration unit tests PASSED successfully!")

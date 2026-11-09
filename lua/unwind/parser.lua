@@ -4,11 +4,34 @@
 
 local M = {}
 
+--- Check if a path represents a non-navigable pseudo-path (e.g. node:*, <frozen ...>, <string>, etc.)
+---@param path string
+---@return boolean
+function M.is_non_navigable_path(path)
+  if not path or path == "" then
+    return true
+  end
+  local trimmed = vim.trim(path)
+  if trimmed:match("^node:") or trimmed:match("^file://") or trimmed:match("^https?://") or trimmed:match("^ftp://") then
+    return true
+  end
+  if trimmed:match("^<.*>$") then
+    return true
+  end
+  if trimmed == "[native code]" or trimmed:match("^unknown%s*source") then
+    return true
+  end
+  return false
+end
+
 --- Check if a file is readable or exists
 ---@param path string
 ---@return boolean
 local function file_exists(path)
   if not path or path == "" then
+    return false
+  end
+  if M.is_non_navigable_path(path) then
     return false
   end
   if vim.uv and vim.uv.fs_stat then
@@ -21,65 +44,141 @@ local function file_exists(path)
   return vim.fn.filereadable(path) == 1
 end
 
+--- Canonicalize path lexical components:
+--- Replaces backslashes with forward slashes, strips duplicate slashes and redundant ./,
+--- resolves .. segments where possible.
+---@param path string
+---@return string
+local function canonicalize_lexical(path)
+  if not path or path == "" then
+    return path
+  end
+  local p = path:gsub("\\", "/")
+  -- Preserve leading slash or drive letter
+  local is_abs_unix = p:sub(1, 1) == "/"
+  local drive, rest = p:match("^([%a]:)/(.*)")
+  if drive then
+    p = "/" .. rest
+  end
+
+  local parts = {}
+  for part in p:gmatch("[^/]+") do
+    if part == "." then
+      -- skip
+    elseif part == ".." then
+      if #parts > 0 and parts[#parts] ~= ".." then
+        table.remove(parts)
+      elseif not is_abs_unix and not drive then
+        table.insert(parts, "..")
+      end
+    else
+      table.insert(parts, part)
+    end
+  end
+
+  local res = table.concat(parts, "/")
+  if drive then
+    res = drive .. "/" .. res
+  elseif is_abs_unix then
+    res = "/" .. res
+  end
+  return res ~= "" and res or (is_abs_unix and "/" or ".")
+end
+
+--- Compiles and sorts path mappings longest-prefix first
+---@param mappings? table<string, string>
+---@return table[] sorted_mappings List of { prefix, target, is_prefix_dir }
+function M.compile_path_mappings(mappings)
+  if not mappings then
+    return {}
+  end
+  local compiled = {}
+  for prefix, target in pairs(mappings) do
+    local norm_prefix = prefix:gsub("\\", "/")
+    local norm_target = target:gsub("\\", "/")
+    table.insert(compiled, {
+      prefix = norm_prefix,
+      target = norm_target,
+    })
+  end
+  table.sort(compiled, function(a, b)
+    return #a.prefix > #b.prefix
+  end)
+  return compiled
+end
+
 --- Normalizes a file path:
 --- Strips container / virtual prefixes (e.g. /app/, /var/task/, C:\workspace\)
---- if a corresponding relative path exists within Neovim's cwd (vim.fn.getcwd()).
+--- if a corresponding relative path exists within Neovim's cwd / root.
 --- Also supports configurable path_mappings and memoizes resolutions.
+--- Returns:
+---   display_path: string (relative or display presentation)
+---   resolved_path: string (canonical resolved filesystem path or best canonicalized path)
+---   navigable: boolean (whether resolved_path points to an actual file or is a non-navigable pseudo-path)
 ---@param raw_path string
----@param opts? { path_mappings?: table<string, string>, cache?: table<string, string> }
----@return string
-function M.normalize_path(raw_path, opts)
+---@param opts? { root?: string, path_mappings?: table<string, string>, compiled_mappings?: table[], cache?: table<string, table> }
+---@return string display_path
+---@return string resolved_path
+---@return boolean navigable
+function M.resolve_and_normalize_path(raw_path, opts)
   if not raw_path or raw_path == "" then
-    return raw_path
+    return raw_path, raw_path, false
   end
 
   opts = opts or {}
   local cache = opts.cache
   if cache and cache[raw_path] then
-    return cache[raw_path]
+    local entry = cache[raw_path]
+    return entry.display, entry.resolved, entry.navigable
   end
 
-  local function store_cache(res)
+  local function store_cache(display, resolved, navigable)
+    display = canonicalize_lexical(display)
+    resolved = canonicalize_lexical(resolved)
     if cache then
-      cache[raw_path] = res
+      cache[raw_path] = { display = display, resolved = resolved, navigable = navigable }
     end
-    return res
+    return display, resolved, navigable
   end
 
-  -- Replace backslashes with forward slashes for uniform processing
-  local normalized = raw_path:gsub("\\", "/")
-
-  local cwd = vim.fn.getcwd():gsub("\\", "/")
-  if cwd:sub(-1) ~= "/" then
-    cwd = cwd .. "/"
+  if M.is_non_navigable_path(raw_path) then
+    return store_cache(raw_path, raw_path, false)
   end
+
+  local normalized = canonicalize_lexical(raw_path)
+
+  local root = opts.root or vim.fn.getcwd()
+  root = canonicalize_lexical(root)
+  if root:sub(-1) ~= "/" then
+    root = root .. "/"
+  end
+
+  local is_windows = vim.fn.has("win32") == 1 or normalized:match("^%a:[/\\]") or root:match("^%a:[/\\]")
 
   -- 1. Apply explicit path_mappings if provided
-  -- Sort mappings longest-prefix-first so overlapping prefixes resolve deterministically.
-  if opts.path_mappings then
-    local mapping_keys = {}
-    for prefix in pairs(opts.path_mappings) do
-      table.insert(mapping_keys, prefix)
-    end
-    table.sort(mapping_keys, function(a, b)
-      return #a > #b
-    end)
+  local compiled_mappings = opts.compiled_mappings
+  if not compiled_mappings and opts.path_mappings then
+    compiled_mappings = M.compile_path_mappings(opts.path_mappings)
+  end
 
-    for _, prefix in ipairs(mapping_keys) do
-      local target = opts.path_mappings[prefix]
-      local norm_prefix = prefix:gsub("\\", "/")
-      local norm_target = target:gsub("\\", "/")
+  if compiled_mappings then
+    for _, item in ipairs(compiled_mappings) do
+      local norm_prefix = item.prefix
+      local norm_target = item.target
 
-      -- Path-segment boundary check: prefix must match exact path or end at path separator
       local is_match = false
       local rest = ""
-      if normalized == norm_prefix then
+
+      local check_norm = is_windows and normalized:lower() or normalized
+      local check_prefix = is_windows and norm_prefix:lower() or norm_prefix
+
+      if check_norm == check_prefix then
         is_match = true
         rest = ""
-      elseif norm_prefix:sub(-1) == "/" and normalized:sub(1, #norm_prefix) == norm_prefix then
+      elseif norm_prefix:sub(-1) == "/" and check_norm:sub(1, #norm_prefix) == check_prefix then
         is_match = true
         rest = normalized:sub(#norm_prefix + 1)
-      elseif norm_prefix:sub(-1) ~= "/" and normalized:sub(1, #norm_prefix + 1) == norm_prefix .. "/" then
+      elseif norm_prefix:sub(-1) ~= "/" and check_norm:sub(1, #norm_prefix + 1) == check_prefix .. "/" then
         is_match = true
         rest = normalized:sub(#norm_prefix + 2)
       end
@@ -90,39 +189,66 @@ function M.normalize_path(raw_path, opts)
         elseif norm_target:sub(-1) ~= "/" and rest:sub(1, 1) ~= "/" and norm_target ~= "" and rest ~= "" then
           rest = "/" .. rest
         end
-        local candidate = norm_target .. rest
-        -- If leading ./ exists, clean it up
+        local candidate = canonicalize_lexical(norm_target .. rest)
         candidate = candidate:gsub("^%./", "")
-        -- Explicit path_mappings are intentional user configurations.
-        -- Map to candidate directly so remote prefixes map to configured local destinations.
-        return store_cache(candidate)
+
+        local resolved = candidate
+        if candidate:sub(1, 1) ~= "/" and not candidate:match("^%a:[/\\]") then
+          resolved = canonicalize_lexical(root .. candidate)
+        end
+        local exists = file_exists(candidate) or file_exists(resolved)
+        return store_cache(candidate, resolved, exists)
       end
     end
   end
 
-  -- If it's already an absolute path inside cwd, make it relative
-  -- On Windows, drive letter case might differ (e.g. C:/ vs c:/)
-  local is_in_cwd = normalized:sub(1, #cwd) == cwd
-  if not is_in_cwd and (vim.fn.has("win32") == 1 or normalized:match("^%a:[/\\]") or cwd:match("^%a:[/\\]")) then
-    if normalized:sub(1, #cwd):lower() == cwd:lower() then
-      is_in_cwd = true
-    end
-  end
-  if is_in_cwd then
-    local rel = normalized:sub(#cwd + 1)
-    if file_exists(rel) then
-      return store_cache(rel)
+  -- If it's already an absolute path inside root, make display relative
+  local check_norm = is_windows and normalized:lower() or normalized
+  local check_root = is_windows and root:lower() or root
+  local is_in_root = check_norm:sub(1, #check_root) == check_root
+
+  if is_in_root then
+    local rel = normalized:sub(#root + 1)
+    if file_exists(rel) or file_exists(root .. rel) or file_exists(normalized) then
+      local abs = file_exists(normalized) and normalized or canonicalize_lexical(root .. rel)
+      return store_cache(rel, abs, true)
     end
   end
 
   -- If directly readable as-is, return it
   if file_exists(raw_path) or file_exists(normalized) then
-    return store_cache(normalized)
+    local abs = normalized
+    if normalized:sub(1, 1) ~= "/" and not normalized:match("^%a:[/\\]") then
+      abs = canonicalize_lexical(root .. normalized)
+    end
+    local display = normalized
+    if is_in_root then
+      display = normalized:sub(#root + 1)
+    end
+    return store_cache(display, abs, true)
+  end
+
+  -- If buffer already loaded in Neovim matching normalized path or root .. normalized
+  local check_loaded_buf = function(p)
+    local b = vim.fn.bufnr(p)
+    if b ~= -1 and vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_is_loaded(b) then
+      return true
+    end
+    return false
+  end
+  local abs_cand = normalized
+  if normalized:sub(1, 1) ~= "/" and not normalized:match("^%a:[/\\]") then
+    abs_cand = canonicalize_lexical(root .. normalized)
+  end
+  if check_loaded_buf(normalized) or check_loaded_buf(abs_cand) then
+    local display = normalized
+    if is_in_root then
+      display = normalized:sub(#root + 1)
+    end
+    return store_cache(display, abs_cand, true)
   end
 
   -- Common container / build prefixes to strip
-  -- Conceptually strip a single project component, e.g. /usr/src/<project>/,
-  -- rather than greedily consuming multiple path components.
   local known_prefixes = {
     "^/app/",
     "^/var/task/",
@@ -130,14 +256,12 @@ function M.normalize_path(raw_path, opts)
     "^%a:[/\\]workspace[/\\]?",
     "^%a:[/\\]project[/\\]?",
     "^%a:[/\\]",
-    "^/[^/]+/", -- strip leading /dir/
+    "^/[^/]+/",
   }
 
   for _, prefix in ipairs(known_prefixes) do
     local stripped = normalized:gsub(prefix, "")
     if stripped ~= normalized and stripped ~= "" then
-      -- Ambiguity check: if stripping leaves only 1 segment (e.g. "main.lua"),
-      -- do not loosely match root-level file unless original normalized path had <= 2 segments.
       local stripped_segments_count = 0
       for _ in stripped:gmatch("[^/]+") do
         stripped_segments_count = stripped_segments_count + 1
@@ -148,35 +272,45 @@ function M.normalize_path(raw_path, opts)
       end
 
       if stripped_segments_count >= 2 or orig_segments_count <= 2 then
-        if file_exists(stripped) or file_exists(cwd .. stripped) then
-          return store_cache(stripped)
+        local abs_candidate = canonicalize_lexical(root .. stripped)
+        if file_exists(stripped) or file_exists(abs_candidate) then
+          return store_cache(stripped, abs_candidate, true)
         end
       end
     end
   end
 
-  -- Try incrementally stripping leading directory segments to find a match in cwd.
-  -- To prevent ambiguous matching where a path matches an unrelated root-level file
-  -- (e.g. resolving /remote/service_a/main.py to root main.py), only strip if
-  -- sub_path has at least 2 components or if stripped segments were leading container roots.
+  -- Try incrementally stripping leading directory segments to find a match in root.
   local segments = {}
   for segment in normalized:gmatch("[^/]+") do
     table.insert(segments, segment)
   end
 
   for i = 2, #segments do
-    -- If only 1 segment remains (e.g. "main.py"), do not loosely match root-level file
-    -- unless the original path only had 2 segments to begin with.
     if (#segments - i + 1) >= 2 or #segments <= 2 then
       local sub_path = table.concat(segments, "/", i)
-      if file_exists(sub_path) or file_exists(cwd .. sub_path) then
-        return store_cache(sub_path)
+      local abs_candidate = canonicalize_lexical(root .. sub_path)
+      if file_exists(sub_path) or file_exists(abs_candidate) then
+        return store_cache(sub_path, abs_candidate, true)
       end
     end
   end
 
   -- If no local match found, return the sanitized path
-  return store_cache(normalized)
+  local abs = normalized
+  if normalized:sub(1, 1) ~= "/" and not normalized:match("^%a:[/\\]") then
+    abs = canonicalize_lexical(root .. normalized)
+  end
+  return store_cache(normalized, abs, false)
+end
+
+--- Backwards-compatible normalize_path function
+---@param raw_path string
+---@param opts? table
+---@return string
+function M.normalize_path(raw_path, opts)
+  local display, _ = M.resolve_and_normalize_path(raw_path, opts)
+  return display
 end
 
 --- Matchers list: functions that accept a line and return { file, line, col, method, raw_line } or nil
@@ -374,14 +508,16 @@ local matchers = {
 }
 
 --- Parses a raw plain-text stacktrace into a list of frame objects:
---- { file, line, col, method, raw_line }
+--- { file, resolved_path, navigable, line, col, method, raw_line }
 --- Inverts Python traceback blocks individually so that crash-first navigation starts
 --- at the innermost fault frame instead of the outermost frame, without reordering
 --- unrelated non-Python stack frames in a mixed trace.
 --- For Python traceback blocks exceeding max_frames, retains the innermost (last N)
---- crash frames rather than the outermost.
+--- crash frames rather than the outermost using bounded storage.
+--- Also avoids misinterpreting indented Python source lines (e.g. value = "file:123")
+--- as non-Python frames.
 ---@param text string
----@param opts? { path_mappings?: table<string, string>, max_frames?: number }
+---@param opts? { root?: string, path_mappings?: table<string, string>, max_frames?: number }
 ---@return table[]
 function M.parse(text, opts)
   opts = opts or {}
@@ -390,9 +526,11 @@ function M.parse(text, opts)
     return frames
   end
 
+  local compiled_mappings = opts.path_mappings and M.compile_path_mappings(opts.path_mappings) or nil
   local cache = {}
   local norm_opts = {
-    path_mappings = opts.path_mappings,
+    root = opts.root,
+    compiled_mappings = compiled_mappings,
     cache = cache,
   }
 
@@ -400,17 +538,15 @@ function M.parse(text, opts)
 
   -- State machine for per-block Python traceback parsing
   local in_python_block = false
+  -- python_block_frames holds at most max_frames items
   local python_block_frames = {}
 
   local function flush_python_block()
     if #python_block_frames > 0 then
-      -- If the block exceeds available remaining frame budget or max_frames,
-      -- retain the LAST N frames (innermost exception frames)
       local remaining_capacity = math.max(0, max_frames - #frames)
       local count_to_keep = math.min(#python_block_frames, remaining_capacity)
       local start_idx = #python_block_frames - count_to_keep + 1
 
-      -- Reverse innermost -> outermost
       for i = #python_block_frames, start_idx, -1 do
         table.insert(frames, python_block_frames[i])
       end
@@ -420,7 +556,7 @@ function M.parse(text, opts)
   end
 
   for line in text:gmatch("[^\r\n]+") do
-    if #frames >= max_frames then
+    if #frames >= max_frames and not in_python_block then
       break
     end
 
@@ -440,24 +576,25 @@ function M.parse(text, opts)
           if matched_frame then
             is_python_frame = true
           else
-            -- If in Python block and line doesn't match Python frame, check if it's
-            -- Python traceback code line / exception line or a different stack trace
-            -- Python traceback lines are typically indented (e.g. "    response = handler()")
-            -- or exception message "ValueError: ...". If it matches another frame type
-            -- (like "at ..."), then the Python block has ended.
-            for idx, matcher in ipairs(matchers) do
-              if idx ~= 6 then
-                local candidate = matcher(line)
-                if candidate then
-                  matched_frame = candidate
-                  break
+            -- If in Python block and line is indented (starts with whitespace) and does NOT
+            -- start with "at " or "from " or "--> ", it's source code or error message.
+            -- Do not attempt generic or non-Python matchers on indented source lines!
+            local is_indented_source = (line:match("^%s") ~= nil) and not line:match("^%s*at%s+") and not line:match("^%s*from%s+") and not line:match("^%s*%-%-%>")
+            if not is_indented_source then
+              for idx, matcher in ipairs(matchers) do
+                if idx ~= 6 then
+                  local candidate = matcher(line)
+                  if candidate then
+                    matched_frame = candidate
+                    break
+                  end
                 end
               end
-            end
 
-            if matched_frame then
-              -- Non-Python frame encountered; flush python block
-              flush_python_block()
+              if matched_frame then
+                -- Non-Python frame encountered; flush python block
+                flush_python_block()
+              end
             end
           end
         else
@@ -471,14 +608,26 @@ function M.parse(text, opts)
         end
 
         if matched_frame then
+          local display, resolved, navigable = M.resolve_and_normalize_path(matched_frame.file, norm_opts)
           matched_frame.raw_line = line
-          matched_frame.file = M.normalize_path(matched_frame.file, norm_opts)
+          matched_frame.file = display
+          matched_frame.resolved_path = resolved
+          matched_frame.navigable = navigable
           matched_frame.method = matched_frame.method or ""
 
           if is_python_frame then
-            table.insert(python_block_frames, matched_frame)
+            -- Bounded storage: keep only the last max_frames items
+            local remaining_budget = math.max(0, max_frames - #frames)
+            if remaining_budget > 0 then
+              if #python_block_frames >= remaining_budget then
+                table.remove(python_block_frames, 1)
+              end
+              table.insert(python_block_frames, matched_frame)
+            end
           else
-            table.insert(frames, matched_frame)
+            if #frames < max_frames then
+              table.insert(frames, matched_frame)
+            end
           end
         end
       end
