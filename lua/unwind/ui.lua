@@ -30,6 +30,9 @@ end
 
 --- Close the input floating window if open
 function M.close_input()
+  -- Invalidate any pending scheduled submit callback from this session
+  input_session_id = input_session_id + 1
+
   if input_win and vim.api.nvim_win_is_valid(input_win) then
     vim.api.nvim_win_close(input_win, true)
   end
@@ -73,6 +76,11 @@ function M.open(files, on_select)
   local editor_width = vim.o.columns
   local editor_height = vim.o.lines
 
+  if editor_width < 10 or editor_height < 5 then
+    vim.notify("Unwind: Terminal window is too small to display menu.", vim.log.levels.WARN)
+    return
+  end
+
   local max_file_len = 0
   for _, item in ipairs(files) do
     if #item.file > max_file_len then
@@ -81,10 +89,12 @@ function M.open(files, on_select)
   end
 
   local target_width = math.max(60, max_file_len + 25)
-  local win_width = math.min(math.max(target_width, 60), editor_width - 4)
-  local win_height = math.min(math.max(#files, 1), editor_height - 4)
-  local row = math.floor((editor_height - win_height) / 2)
-  local col = math.floor((editor_width - win_width) / 2)
+  local max_w = math.max(1, editor_width - 4)
+  local max_h = math.max(1, editor_height - 4)
+  local win_width = math.max(1, math.min(math.max(target_width, 60), max_w))
+  local win_height = math.max(1, math.min(math.max(#files, 1), max_h))
+  local row = math.max(0, math.floor((editor_height - win_height) / 2))
+  local col = math.max(0, math.floor((editor_width - win_width) / 2))
 
   -- Format lines: "1. src/services/checkout.lua                (2 frames)"
   -- Compute padding against win_width - 2 so suffix does not wrap onto a second line
@@ -225,10 +235,18 @@ function M.open_input(on_submit)
 
   local editor_width = vim.o.columns
   local editor_height = vim.o.lines
-  local win_width = math.min(math.max(math.floor(editor_width * 0.8), 70), editor_width - 4)
-  local win_height = math.min(math.max(math.floor(editor_height * 0.6), 15), editor_height - 4)
-  local row = math.floor((editor_height - win_height) / 2)
-  local col = math.floor((editor_width - win_width) / 2)
+
+  if editor_width < 10 or editor_height < 5 then
+    vim.notify("Unwind: Terminal window is too small to display input window.", vim.log.levels.WARN)
+    return
+  end
+
+  local max_w = math.max(1, editor_width - 4)
+  local max_h = math.max(1, editor_height - 4)
+  local win_width = math.max(1, math.min(math.max(math.floor(editor_width * 0.8), 70), max_w))
+  local win_height = math.max(1, math.min(math.max(math.floor(editor_height * 0.6), 15), max_h))
+  local row = math.max(0, math.floor((editor_height - win_height) / 2))
+  local col = math.max(0, math.floor((editor_width - win_width) / 2))
 
   local win_opts = {
     relative = "editor",

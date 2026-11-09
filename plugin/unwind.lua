@@ -64,18 +64,6 @@ vim.api.nvim_create_user_command("UnwindClear", function()
 end, { desc = "Clear active decorations and state" })
 
 -- Default keybindings using inline lazy wrappers (preserving lazy loading)
--- Only map if not already mapped or overridden
-local default_maps = {
-  { key = "<leader>w", fn = function() require("unwind").menu() end, desc = "Unwind: Open stacktrace files menu" },
-  { key = "<leader>c", fn = function() require("unwind").ingest_clipboard() end, desc = "Unwind: Ingest stacktrace from clipboard" },
-  { key = "]u", fn = function() require("unwind").next() end, desc = "Unwind: Next stack frame" },
-  { key = "[u", fn = function() require("unwind").prev() end, desc = "Unwind: Previous stack frame" },
-  { key = "]f", fn = function() require("unwind").next_file() end, desc = "Unwind: Next stacktrace file" },
-  { key = "[f", fn = function() require("unwind").prev_file() end, desc = "Unwind: Previous stacktrace file" },
-}
-
-for _, map in ipairs(default_maps) do
-  if vim.fn.maparg(map.key, "n") == "" then
-    vim.keymap.set("n", map.key, map.fn, { desc = map.desc, silent = true })
-  end
-end
+-- Default keybindings using centralized installer with ownership tracking
+-- Only maps if not already mapped, and records ownership in unwind
+require("unwind").install_keymaps(require("unwind").config.keymaps, true)

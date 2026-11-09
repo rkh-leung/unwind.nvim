@@ -58,13 +58,24 @@ function M.collect(frames, opts)
   local filter_vendor = opts.filter_vendor or false
   local ignore_patterns = opts.ignore_patterns
 
+  local vendor_cache = {}
+  local function is_vendor(fpath)
+    local cached = vendor_cache[fpath]
+    if cached ~= nil then
+      return cached
+    end
+    local val = M.is_vendor_or_ignored(fpath, ignore_patterns)
+    vendor_cache[fpath] = val
+    return val
+  end
+
   local filtered_frames = {}
   for _, frame in ipairs(frames) do
     local fpath = frame.file
     local should_ignore = false
 
     if filter_vendor then
-      if M.is_vendor_or_ignored(fpath, ignore_patterns) then
+      if is_vendor(fpath) then
         should_ignore = true
       end
     end
@@ -92,7 +103,7 @@ function M.collect(frames, opts)
         primary_method = frame.method or "",
         total_frames = 1,
         frames = { frame },
-        is_vendor = M.is_vendor_or_ignored(fpath, ignore_patterns),
+        is_vendor = is_vendor(fpath),
       }
       table.insert(files, entry)
       file_map[fpath] = #files

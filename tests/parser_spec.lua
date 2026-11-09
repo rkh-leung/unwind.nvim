@@ -278,7 +278,24 @@ assert_true(unwind.state.files[2].is_vendor, "activesupport should be tagged ven
 assert_true(unwind.state.files[3].is_vendor, "delegate.rb should be tagged vendor")
 assert_true(not unwind.state.files[4].is_vendor, "brand.rb should not be vendor")
 
--- Test next_file / prev_file cycling
+-- Test next_file / prev_file cycling when files exist on disk
+-- Create dummy buffers or mock jump_to_frame to simulate navigation
+local feed_buf = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_name(feed_buf, vim.fs.normalize(vim.fn.getcwd()) .. "/core/app/presenters/feed.rb")
+vim.api.nvim_buf_set_lines(feed_buf, 0, -1, false, { "class Feed", "end" })
+
+local as_buf = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_name(as_buf, "/apps/powershop/shared/bundle/ruby/3.3.0/gems/activesupport-8.1.3.1/lib/active_support/callbacks.rb")
+vim.api.nvim_buf_set_lines(as_buf, 0, -1, false, { "module Callbacks", "end" })
+
+local del_buf = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_name(del_buf, "/usr/lib/x86_64-linux-gnu/ruby/3.3.0/delegate.rb")
+vim.api.nvim_buf_set_lines(del_buf, 0, -1, false, { "class Delegate", "end" })
+
+local brand_buf = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_name(brand_buf, vim.fs.normalize(vim.fn.getcwd()) .. "/app/models/brand.rb")
+vim.api.nvim_buf_set_lines(brand_buf, 0, -1, false, { "class Brand", "end" })
+
 unwind.jump_to_file(1)
 assert_eq(unwind.state.active_file_index, 1, "active file index 1")
 unwind.next_file()
@@ -552,6 +569,216 @@ do
   })
   assert_eq(#mapped_frames, 1, "parsed frame with path_mappings")
   assert_eq(mapped_frames[1].file, "src/worker.py", "mapped remote path to local")
+end
+
+-- =========================================================================
+-- ADDITIONAL REGRESSION TESTS FOR LATEST CODE REVIEW FINDINGS
+-- =========================================================================
+
+print("--> [Regression] Overlapping path_mappings longest-prefix matching & segment boundary...")
+do
+  local trace = [[
+  File "/remote/app/sub/service.py", line 10, in run
+  File "/remote/app/root.py", line 20, in start
+  File "/remote/application/other.py", line 30, in other
+]]
+  local frames = parser.parse(trace, {
+    path_mappings = {
+      ["/remote/app/"] = "local/app/",
+      ["/remote/app/sub/"] = "local/sub/",
+    }
+  })
+  assert_eq(#frames, 3, "parsed 3 frames")
+  -- Longest prefix /remote/app/sub/ must match /remote/app/sub/service.py first
+  assert_eq(frames[1].file, "local/sub/service.py", "longest prefix mapping matched")
+  assert_eq(frames[2].file, "local/app/root.py", "shorter prefix mapping matched")
+  -- Segment boundary: /remote/application/ should NOT match /remote/app/
+  assert_true(frames[3].file:find("local/app") == nil, "/remote/application should not match /remote/app")
+end
+
+print("--> [Regression] /usr/src/<project>/src/main.lua prefix stripping without greedy collapse...")
+do
+  local path = "/usr/src/service/src/main.lua"
+  -- If /usr/src/ was greedy with /usr/src/[%w_%-./]+/, it would eat /usr/src/service/src/
+  -- Our non-greedy prefix only eats /usr/src/service/
+  -- If local src/main.lua doesn't exist, it should not greedily collapse to root main.lua
+  local normalized = parser.normalize_path(path)
+  -- Since neither service/src/main.lua nor src/main.lua exist in root cwd, it preserves normalized path
+  assert_eq(normalized, "/usr/src/service/src/main.lua", "non-existent path with /usr/src/ is not corrupted")
+end
+
+print("--> [Regression] Centralized keymap ownership with setup({ keymaps = false })...")
+do
+  -- Re-register default keymaps first via unwind.setup()
+  unwind.setup({
+    keymaps = {
+      menu = "<leader>w",
+      clipboard = "<leader>c",
+      next = "]u",
+      prev = "[u",
+      next_file = "]f",
+      prev_file = "[f",
+    }
+  })
+  assert_true(vim.fn.maparg("]u", "n") ~= "", "]u should be mapped")
+
+  -- Disable keymaps completely
+  unwind.setup({ keymaps = false })
+  assert_eq(vim.fn.maparg("]u", "n"), "", "]u should be removed when keymaps = false")
+  assert_eq(vim.fn.maparg("[u", "n"), "", "[u should be removed when keymaps = false")
+  assert_eq(vim.fn.maparg("]f", "n"), "", "]f should be removed when keymaps = false")
+  assert_eq(#unwind._installed_keymaps, 0, "no installed keymaps tracked")
+
+  -- Restore default keymaps
+  unwind.setup({
+    keymaps = {
+      menu = "<leader>w",
+      clipboard = "<leader>c",
+      next = "]u",
+      prev = "[u",
+      next_file = "]f",
+      prev_file = "[f",
+    }
+  })
+  assert_true(vim.fn.maparg("]u", "n") ~= "", "]u restored")
+end
+
+print("--> [Regression] Failed jump_to_file() preserving active_index and active_file_index...")
+do
+  unwind.clear()
+  -- Set active state
+  unwind.state.frames = {
+    { file = "tests/fixtures/dummy.txt", line = 1, col = 1, method = "test" },
+    { file = "/nonexistent/path/never_there.txt", line = 1, col = 1, method = "fail" },
+  }
+  unwind.state.files = {
+    { file = "tests/fixtures/dummy.txt", primary_line = 1, primary_col = 1, total_frames = 1 },
+    { file = "/nonexistent/path/never_there.txt", primary_line = 1, primary_col = 1, total_frames = 1 },
+  }
+  -- Navigate to file 1 successfully
+  local ok1 = unwind.jump_to_file(1)
+  assert_true(ok1, "file 1 jump succeeded")
+  assert_eq(unwind.state.active_index, 1, "active_index is 1")
+  assert_eq(unwind.state.active_file_index, 1, "active_file_index is 1")
+
+  -- Now attempt to jump to file 2 (nonexistent)
+  local ok2 = unwind.jump_to_file(2)
+  assert_true(not ok2, "file 2 jump failed")
+  -- Both active_index and active_file_index MUST remain at 1
+  assert_eq(unwind.state.active_index, 1, "active_index preserved after failed jump")
+  assert_eq(unwind.state.active_file_index, 1, "active_file_index preserved after failed jump")
+  unwind.clear()
+end
+
+print("--> [Regression] Mixed traces (Node/.NET/Rust + Python) reversing only Python blocks...")
+do
+  local mixed_trace = [[
+    at Object.run (/app/src/index.js:10:5)
+    at Server.listen (/app/src/server.js:25:3)
+Traceback (most recent call last):
+  File "lib/outer.py", line 10, in outer
+    call_inner()
+  File "lib/inner.py", line 20, in inner
+    crash()
+  --> src/main.rs:50:2
+]]
+  local frames = parser.parse(mixed_trace)
+  assert_eq(#frames, 5, "parsed 5 total frames")
+  -- First two frames are Node.js in forward order
+  assert_true(frames[1].file:find("index.js") ~= nil, "frame 1 is index.js")
+  assert_eq(frames[1].line, 10, "frame 1 line 10")
+  assert_true(frames[2].file:find("server.js") ~= nil, "frame 2 is server.js")
+  assert_eq(frames[2].line, 25, "frame 2 line 25")
+
+  -- Python block frames (3 and 4) are reversed (inner then outer)
+  assert_true(frames[3].file:find("inner.py") ~= nil, "frame 3 is innermost python frame inner.py")
+  assert_eq(frames[3].line, 20, "frame 3 line 20")
+  assert_true(frames[4].file:find("outer.py") ~= nil, "frame 4 is outermost python frame outer.py")
+  assert_eq(frames[4].line, 10, "frame 4 line 10")
+
+  -- Frame 5 is Rust compiler in forward order
+  assert_true(frames[5].file:find("main.rs") ~= nil, "frame 5 is main.rs")
+  assert_eq(frames[5].line, 50, "frame 5 line 50")
+end
+
+print("--> [Regression] Python trace exceeding max_frames retains innermost crash frames...")
+do
+  local deep_python = "Traceback (most recent call last):\n"
+  for i = 1, 20 do
+    deep_python = deep_python .. string.format('  File "step_%02d.py", line %d, in func_%d\n    pass\n', i, i, i)
+  end
+  deep_python = deep_python .. '  File "final_crash.py", line 99, in crash\n    raise Exception("boom")\n'
+
+  -- Total 21 frames in Python traceback. If max_frames = 5:
+  local frames = parser.parse(deep_python, { max_frames = 5 })
+  assert_eq(#frames, 5, "capped at 5 frames")
+  -- Innermost crash frame (final_crash.py) must be at frame 1!
+  assert_eq(frames[1].file, "final_crash.py", "innermost crash frame retained at index 1")
+  assert_eq(frames[1].line, 99, "innermost crash frame line 99")
+  assert_eq(frames[2].file, "step_20.py", "frame 2 is step_20.py")
+  assert_eq(frames[5].file, "step_17.py", "frame 5 is step_17.py")
+end
+
+print("--> [Regression] Bounded file read in ingest_file...")
+do
+  -- Create a temporary file larger than max_input_bytes
+  local tmp_file = vim.fn.tempname()
+  local f = io.open(tmp_file, "w")
+  local line = 'File "test_bounded.py", line 10, in work\n'
+  -- Write 1000 lines
+  for _ = 1, 1000 do
+    f:write(line)
+  end
+  f:close()
+
+  unwind.clear()
+  -- Set small max_input_bytes
+  local orig_limit = unwind.config.max_input_bytes
+  unwind.config.max_input_bytes = 200 -- 200 bytes limit
+  unwind.ingest_file(tmp_file)
+  assert_true(#unwind.state.frames > 0, "frames loaded despite truncation")
+  -- Restore original limit
+  unwind.config.max_input_bytes = orig_limit
+  os.remove(tmp_file)
+  unwind.clear()
+end
+
+print("--> [Regression] Input scratchpad cancellation invalidates scheduled submit...")
+do
+  local ui = require("unwind.ui")
+  local submitted = false
+  ui.open_input(function(_)
+    submitted = true
+  end)
+  -- Immediately cancel/close input
+  ui.close_input()
+  -- Wait to ensure any scheduled callback would have run
+  vim.wait(50, function() return false end)
+  assert_true(not submitted, "scheduled callback must not run after close_input()")
+end
+
+print("--> [Regression] Small terminal dimensions do not crash ui.open / ui.open_input...")
+do
+  local ui = require("unwind.ui")
+  local orig_cols = vim.o.columns
+  local orig_lines = vim.o.lines
+
+  -- Neovim minimum terminal dimensions: columns >= 12, lines >= 5
+  vim.o.columns = 12
+  vim.o.lines = 5
+
+  local ok_open = pcall(function()
+    ui.open({ { file = "test.lua", total_frames = 1 } }, function() end)
+  end)
+  assert_true(ok_open, "ui.open should not throw on small terminal")
+
+  local ok_input = pcall(function()
+    ui.open_input(function() end)
+  end)
+  assert_true(ok_input, "ui.open_input should not throw on small terminal")
+
+  vim.o.columns = orig_cols
+  vim.o.lines = orig_lines
 end
 
 print("All parser, collector & integration unit tests PASSED successfully!")
