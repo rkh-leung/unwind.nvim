@@ -51,8 +51,10 @@ function M.open(files, on_select)
   vim.bo[buf].swapfile = false
   vim.bo[buf].buflisted = false
 
-  -- Format lines: "1. src/services/checkout.lua                (2 frames)"
-  local lines = {}
+  -- Calculate centered floating window dimensions first
+  local editor_width = vim.o.columns
+  local editor_height = vim.o.lines
+
   local max_file_len = 0
   for _, item in ipairs(files) do
     if #item.file > max_file_len then
@@ -61,14 +63,21 @@ function M.open(files, on_select)
   end
 
   local target_width = math.max(60, max_file_len + 25)
+  local win_width = math.min(math.max(target_width, 60), editor_width - 4)
+  local win_height = math.min(math.max(#files, 1), editor_height - 4)
+  local row = math.floor((editor_height - win_height) / 2)
+  local col = math.floor((editor_width - win_width) / 2)
 
+  -- Format lines: "1. src/services/checkout.lua                (2 frames)"
+  -- Compute padding against win_width - 2 so suffix does not wrap onto a second line
+  local lines = {}
   for idx, item in ipairs(files) do
     local prefix = string.format("%d. %s", idx, item.file)
     local frame_suffix = string.format("(%d frame%s)", item.total_frames, item.total_frames > 1 and "s" or "")
     if item.is_vendor then
       frame_suffix = frame_suffix .. " [vendor]"
     end
-    local padding_len = math.max(2, target_width - #prefix - #frame_suffix - 4)
+    local padding_len = math.max(2, (win_width - 2) - #prefix - #frame_suffix - 2)
     local line_str = prefix .. string.rep(" ", padding_len) .. frame_suffix
     table.insert(lines, line_str)
   end
@@ -77,13 +86,24 @@ function M.open(files, on_select)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
 
-  -- Calculate centered floating window dimensions
-  local editor_width = vim.o.columns
-  local editor_height = vim.o.lines
-  local win_width = math.min(math.max(target_width, 60), editor_width - 4)
-  local win_height = math.min(math.max(#lines, 1), editor_height - 4)
-  local row = math.floor((editor_height - win_height) / 2)
-  local col = math.floor((editor_width - win_width) / 2)
+  -- Apply syntax highlights per line in the menu buffer
+  local ns_ui = vim.api.nvim_create_namespace("unwind_ui")
+  vim.api.nvim_buf_clear_namespace(buf, ns_ui, 0, -1)
+
+  for idx, item in ipairs(files) do
+    local line_idx = idx - 1
+    -- Highlight index number: e.g. "1." or "10."
+    local prefix_len = tostring(idx):len() + 1
+    vim.api.nvim_buf_add_highlight(buf, ns_ui, "Number", line_idx, 0, prefix_len)
+    -- Highlight "[vendor]" tag
+    if item.is_vendor then
+      local line_content = lines[idx]
+      local s, e = line_content:find("%[vendor%]")
+      if s and e then
+        vim.api.nvim_buf_add_highlight(buf, ns_ui, "Comment", line_idx, s - 1, e)
+      end
+    end
+  end
 
   local win_opts = {
     relative = "editor",
@@ -101,6 +121,7 @@ function M.open(files, on_select)
   active_win = win
 
   vim.wo[win].cursorline = true
+  vim.wo[win].winhighlight = "Normal:NormalFloat,FloatBorder:FloatBorder,CursorLine:PmenuSel"
 
   local function select_idx(idx)
     if files[idx] then
@@ -169,7 +190,8 @@ function M.open_input(on_submit)
   local buf = vim.api.nvim_create_buf(false, true)
   input_buf = buf
 
-  vim.bo[buf].buftype = "nofile"
+  vim.api.nvim_buf_set_name(buf, "unwind://input")
+  vim.bo[buf].buftype = "acwrite"
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].swapfile = false
   vim.bo[buf].buflisted = false
@@ -195,6 +217,8 @@ function M.open_input(on_submit)
 
   local win = vim.api.nvim_open_win(buf, true, win_opts)
   input_win = win
+
+  vim.wo[win].winhighlight = "Normal:NormalFloat,FloatBorder:FloatBorder,CursorLine:PmenuSel"
 
   local function submit()
     local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)

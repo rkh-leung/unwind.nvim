@@ -68,8 +68,8 @@ function M.render(bufnr, line, depth, method, file, total_frames)
     return nil
   end
 
-  -- Clear previous decorations in this buffer first
-  M.clear(bufnr)
+  -- Clear previous decorations across all buffers so only the active frame is marked
+  M.clear()
 
   local line_count = vim.api.nvim_buf_line_count(bufnr)
   local target_line = math.max(1, math.min(line or 1, line_count))

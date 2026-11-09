@@ -34,11 +34,6 @@ function M.normalize_path(raw_path)
   -- Replace backslashes with forward slashes for uniform processing
   local normalized = raw_path:gsub("\\", "/")
 
-  -- If directly readable as-is, return it
-  if file_exists(raw_path) or file_exists(normalized) then
-    return normalized
-  end
-
   local cwd = vim.fn.getcwd():gsub("\\", "/")
   if cwd:sub(-1) ~= "/" then
     cwd = cwd .. "/"
@@ -50,6 +45,11 @@ function M.normalize_path(raw_path)
     if file_exists(rel) then
       return rel
     end
+  end
+
+  -- If directly readable as-is, return it
+  if file_exists(raw_path) or file_exists(normalized) then
+    return normalized
   end
 
   -- Common container / build prefixes to strip
@@ -139,10 +139,14 @@ local matchers = {
   -- 4. Node.js / V8 with method:
   -- "at Method (/path/to/file.js:45:12)" or "at async Method (/path/to/file.js:45:12)"
   function(line)
-    local method, file, lnum, col = line:match("^%s*at%s+(.-)%s*%(%s*([%w_%-./\\]+%.%w+):(%d+):?(%d*)%s*%)")
+    local method, file, lnum, col = line:match("^%s*at%s+(.-)%s*%(%s*(.-):(%d+):(%d+)%s*%)")
+    if not file then
+      method, file, lnum = line:match("^%s*at%s+(.-)%s*%(%s*(.-):(%d+)%s*%)")
+      col = 1
+    end
     if file and lnum then
       return {
-        file = file,
+        file = vim.trim(file),
         line = tonumber(lnum),
         col = tonumber(col) or 1,
         method = method or "",
@@ -154,10 +158,14 @@ local matchers = {
   -- 5. Rust backtrace or Node.js without parenthesized method:
   -- "at /path/to/main.rs:45:12" or "at /path/to/file.js:45"
   function(line)
-    local file, lnum, col = line:match("^%s*at%s+([%w_%-./\\]+%.%w+):(%d+):?(%d*)")
+    local file, lnum, col = line:match("^%s*at%s+(.-):(%d+):(%d+)")
+    if not file then
+      file, lnum = line:match("^%s*at%s+(.-):(%d+)")
+      col = 1
+    end
     if file and lnum then
       return {
-        file = file,
+        file = vim.trim(file),
         line = tonumber(lnum),
         col = tonumber(col) or 1,
         method = "",
@@ -168,14 +176,16 @@ local matchers = {
 
   -- 6. Python style:
   -- 'File "/path/to/file.py", line 45, in method_name'
+  -- allow angle brackets, spaces, and optional method names (<module>, <listcomp>, <lambda>)
   function(line)
-    local file, lnum, method = line:match('File%s+"([^"]+)",%s*line%s+(%d+),%s*in%s+([%w_]+)')
+    local file, lnum, method = line:match('File%s+"([^"]+)",%s*line%s+(%d+),?%s*(.*)')
     if file and lnum then
+      local m = method:match("^in%s+(.+)$") or method
       return {
         file = file,
         line = tonumber(lnum),
         col = 1,
-        method = method or "",
+        method = vim.trim(m),
       }
     end
     return nil
@@ -186,20 +196,22 @@ local matchers = {
   -- or with single quotes: 'from /path/to/file.rb:12:in '\''method_name\'\''
   -- or blocks: 'from /path/to/file.rb:12:in `block in foo'\''
   function(line)
-    local file, lnum, method = line:match("([%w_%-./\\]+%.%w+):(%d+):in%s+[`'](.-)['`]")
+    local file, lnum, method = line:match("([^:]+%.%w+):(%d+):in%s+[`'](.-)['`]")
     if file and lnum then
+      file = file:match("^%s*from%s+(.+)$") or file
       return {
-        file = file,
+        file = vim.trim(file),
         line = tonumber(lnum),
         col = 1,
         method = method or "",
       }
     end
     -- Also match Ruby lines where in has no backticks/quotes or is omitted:
-    local f2, l2 = line:match("([%w_%-./\\]+%.%w+):(%d+):?")
+    local f2, l2 = line:match("([^:]+%.%w+):(%d+):?")
     if f2 and l2 and (line:find("^%s*from%s+") or line:find("%.rb:%d+")) then
+      f2 = f2:match("^%s*from%s+(.+)$") or f2
       return {
-        file = f2,
+        file = vim.trim(f2),
         line = tonumber(l2),
         col = 1,
         method = "",
@@ -209,16 +221,21 @@ local matchers = {
   end,
 
   -- 8. Generic fallback:
-  -- "([%w_%-./\\]+%.%w+):(%d+):?(%d*)"
+  -- matches path:line:col or path:line
+  -- support paths with spaces, @, +, (), etc.
   function(line)
-    local file, lnum, col = line:match("([%w_%-./\\]+%.%w+):(%d+):?(%d*)")
+    -- Match leading non-colon or trimmed prefix up to :line:col or :line
+    local file, lnum, col = line:match("^%s*([^:\r\n]+%.%w+):(%d+):?(%d*)")
+    if not file or not lnum then
+      file, lnum, col = line:match("([%w_%-./\\]+%.%w+):(%d+):?(%d*)")
+    end
     if file and lnum then
       -- Skip common falsy URL prefixes like http:// or https://
       if file:match("^https?:") or file:match("^ftp:") then
         return nil
       end
       return {
-        file = file,
+        file = vim.trim(file),
         line = tonumber(lnum),
         col = tonumber(col) or 1,
         method = "",
