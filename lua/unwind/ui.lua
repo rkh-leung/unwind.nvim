@@ -5,8 +5,12 @@ local M = {}
 
 local active_win = nil
 local active_buf = nil
+local menu_source_win = nil
+
 local input_win = nil
 local input_buf = nil
+local input_source_win = nil
+local input_session_id = 0
 
 --- Close the floating menu if open
 function M.close()
@@ -16,8 +20,12 @@ function M.close()
   if active_buf and vim.api.nvim_buf_is_valid(active_buf) then
     pcall(vim.api.nvim_buf_delete, active_buf, { force = true })
   end
+  if menu_source_win and vim.api.nvim_win_is_valid(menu_source_win) then
+    pcall(vim.api.nvim_set_current_win, menu_source_win)
+  end
   active_win = nil
   active_buf = nil
+  menu_source_win = nil
 end
 
 --- Close the input floating window if open
@@ -28,8 +36,12 @@ function M.close_input()
   if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
     pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
   end
+  if input_source_win and vim.api.nvim_win_is_valid(input_source_win) then
+    pcall(vim.api.nvim_set_current_win, input_source_win)
+  end
   input_win = nil
   input_buf = nil
+  input_source_win = nil
 end
 
 --- Toggles or opens the floating menu displaying unique files
@@ -129,6 +141,9 @@ function M.open(files, on_select)
     title_pos = "center",
   }
 
+  -- Capture the originating source window before opening float
+  menu_source_win = vim.api.nvim_get_current_win()
+
   local win = vim.api.nvim_open_win(buf, true, win_opts)
   active_win = win
 
@@ -196,6 +211,9 @@ function M.open_input(on_submit)
     return
   end
 
+  input_session_id = input_session_id + 1
+  local current_session = input_session_id
+
   local buf = vim.api.nvim_create_buf(false, true)
   input_buf = buf
 
@@ -224,20 +242,33 @@ function M.open_input(on_submit)
     title_pos = "center",
   }
 
+  input_source_win = vim.api.nvim_get_current_win()
+
   local win = vim.api.nvim_open_win(buf, true, win_opts)
   input_win = win
 
   vim.wo[win].winhighlight = "Normal:NormalFloat,FloatBorder:FloatBorder,CursorLine:PmenuSel"
 
+  local submitted = false
   local function submit()
-    if not input_buf or not vim.api.nvim_buf_is_valid(input_buf) then
+    if submitted then
       return
     end
-    local lines = vim.api.nvim_buf_get_lines(input_buf, 0, -1, false)
+    submitted = true
+
+    if not vim.api.nvim_buf_is_valid(buf) then
+      return
+    end
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
     local text = table.concat(lines, "\n")
-    vim.bo[input_buf].modified = false
-    vim.cmd("stopinsert")
+    vim.bo[buf].modified = false
+    pcall(vim.cmd, "stopinsert")
+
     vim.schedule(function()
+      -- If user opened a newer input session in between, ignore this stale scheduled callback
+      if input_session_id ~= current_session then
+        return
+      end
       M.close_input()
       if on_submit then
         on_submit(text)

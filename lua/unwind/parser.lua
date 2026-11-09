@@ -24,15 +24,52 @@ end
 --- Normalizes a file path:
 --- Strips container / virtual prefixes (e.g. /app/, /var/task/, C:\workspace\)
 --- if a corresponding relative path exists within Neovim's cwd (vim.fn.getcwd()).
+--- Also supports configurable path_mappings and memoizes resolutions.
 ---@param raw_path string
+---@param opts? { path_mappings?: table<string, string>, cache?: table<string, string> }
 ---@return string
-function M.normalize_path(raw_path)
+function M.normalize_path(raw_path, opts)
   if not raw_path or raw_path == "" then
     return raw_path
   end
 
+  opts = opts or {}
+  local cache = opts.cache
+  if cache and cache[raw_path] then
+    return cache[raw_path]
+  end
+
+  local function store_cache(res)
+    if cache then
+      cache[raw_path] = res
+    end
+    return res
+  end
+
   -- Replace backslashes with forward slashes for uniform processing
   local normalized = raw_path:gsub("\\", "/")
+
+  -- 1. Apply explicit path_mappings if provided
+  if opts.path_mappings then
+    for prefix, target in pairs(opts.path_mappings) do
+      local norm_prefix = prefix:gsub("\\", "/")
+      local norm_target = target:gsub("\\", "/")
+      if normalized:sub(1, #norm_prefix) == norm_prefix then
+        local rest = normalized:sub(#norm_prefix + 1)
+        if norm_target:sub(-1) == "/" and rest:sub(1, 1) == "/" then
+          rest = rest:sub(2)
+        elseif norm_target:sub(-1) ~= "/" and rest:sub(1, 1) ~= "/" and norm_target ~= "" and rest ~= "" then
+          rest = "/" .. rest
+        end
+        local candidate = norm_target .. rest
+        -- If leading ./ exists, clean it up
+        candidate = candidate:gsub("^%./", "")
+        if file_exists(candidate) or file_exists(raw_path) or true then
+          return store_cache(candidate)
+        end
+      end
+    end
+  end
 
   local cwd = vim.fn.getcwd():gsub("\\", "/")
   if cwd:sub(-1) ~= "/" then
@@ -50,13 +87,13 @@ function M.normalize_path(raw_path)
   if is_in_cwd then
     local rel = normalized:sub(#cwd + 1)
     if file_exists(rel) then
-      return rel
+      return store_cache(rel)
     end
   end
 
   -- If directly readable as-is, return it
   if file_exists(raw_path) or file_exists(normalized) then
-    return normalized
+    return store_cache(normalized)
   end
 
   -- Common container / build prefixes to strip
@@ -74,26 +111,33 @@ function M.normalize_path(raw_path)
     local stripped = normalized:gsub(prefix, "")
     if stripped ~= normalized and stripped ~= "" then
       if file_exists(stripped) or file_exists(cwd .. stripped) then
-        return stripped
+        return store_cache(stripped)
       end
     end
   end
 
-  -- Try incrementally stripping leading directory segments to find a match in cwd
+  -- Try incrementally stripping leading directory segments to find a match in cwd.
+  -- To prevent ambiguous matching where a path matches an unrelated root-level file
+  -- (e.g. resolving /remote/service_a/main.py to root main.py), only strip if
+  -- sub_path has at least 2 components or if stripped segments were leading container roots.
   local segments = {}
   for segment in normalized:gmatch("[^/]+") do
     table.insert(segments, segment)
   end
 
   for i = 2, #segments do
-    local sub_path = table.concat(segments, "/", i)
-    if file_exists(sub_path) or file_exists(cwd .. sub_path) then
-      return sub_path
+    -- If only 1 segment remains (e.g. "main.py"), do not loosely match root-level file
+    -- unless the original path only had 2 segments to begin with.
+    if (#segments - i + 1) >= 2 or #segments <= 2 then
+      local sub_path = table.concat(segments, "/", i)
+      if file_exists(sub_path) or file_exists(cwd .. sub_path) then
+        return store_cache(sub_path)
+      end
     end
   end
 
   -- If no local match found, return the sanitized path
-  return normalized
+  return store_cache(normalized)
 end
 
 --- Matchers list: functions that accept a line and return { file, line, col, method, raw_line } or nil
@@ -292,28 +336,57 @@ local matchers = {
 
 --- Parses a raw plain-text stacktrace into a list of frame objects:
 --- { file, line, col, method, raw_line }
+--- Inverts Python traceback blocks so that crash-first navigation starts
+--- at the innermost fault frame instead of the outermost frame.
 ---@param text string
+---@param opts? { path_mappings?: table<string, string>, max_frames?: number }
 ---@return table[]
-function M.parse(text)
+function M.parse(text, opts)
+  opts = opts or {}
   local frames = {}
   if not text or text == "" then
     return frames
   end
 
+  local cache = {}
+  local norm_opts = {
+    path_mappings = opts.path_mappings,
+    cache = cache,
+  }
+
+  local max_frames = opts.max_frames or 1000
+
+  -- Check if this is a Python traceback:
+  -- "Traceback (most recent call last):"
+  -- In Python tracebacks, frames are ordered caller -> callee (most recent call last).
+  -- Reversing the frames produces crash-first navigation where frame 1 is the fault.
+  local is_python_traceback = text:find("Traceback %s*%(most recent call last%):") ~= nil
+
   for line in text:gmatch("[^\r\n]+") do
+    if #frames >= max_frames then
+      break
+    end
     local trimmed = line:match("^%s*(.-)%s*$")
     if trimmed ~= "" then
       for _, matcher in ipairs(matchers) do
         local frame = matcher(line)
         if frame then
           frame.raw_line = line
-          frame.file = M.normalize_path(frame.file)
+          frame.file = M.normalize_path(frame.file, norm_opts)
           frame.method = frame.method or ""
           table.insert(frames, frame)
           break
         end
       end
     end
+  end
+
+  if is_python_traceback and #frames > 1 then
+    local reversed = {}
+    for i = #frames, 1, -1 do
+      table.insert(reversed, frames[i])
+    end
+    frames = reversed
   end
 
   return frames

@@ -31,7 +31,14 @@ function M.is_vendor_or_ignored(fpath, ignore_patterns)
   if fpath:sub(1, 1) == "/" or fpath:match("^%a:[/\\]") then
     local cwd = vim.fs.normalize(vim.fn.getcwd())
     local norm = vim.fs.normalize(fpath)
-    if not vim.startswith(norm, cwd) then
+
+    local is_windows = vim.fn.has("win32") == 1 or norm:match("^%a:[/\\]") or cwd:match("^%a:[/\\]")
+    local check_cwd = is_windows and cwd:lower() or cwd
+    local check_norm = is_windows and norm:lower() or norm
+
+    -- Proper boundary check: must either be exact cwd or have cwd followed by path separator '/'
+    local is_in_workspace = (check_norm == check_cwd) or vim.startswith(check_norm, check_cwd .. "/")
+    if not is_in_workspace then
       return true
     end
   end
@@ -45,7 +52,7 @@ end
 --- Supports filtering out vendor / third-party / ignored library frames.
 ---@param frames table[] List of frame objects { file, line, col, method, raw_line }
 ---@param opts? { filter_vendor?: boolean, ignore_patterns?: string[], only_workspace_files?: boolean }
----@return { files: table[], frames: table[] }
+---@return { files: table[], frames: table[], all_filtered?: boolean }
 function M.collect(frames, opts)
   opts = opts or {}
   local filter_vendor = opts.filter_vendor or false
@@ -67,8 +74,8 @@ function M.collect(frames, opts)
     end
   end
 
-  -- If filter eliminated all frames, fallback to all frames so user isn't left empty-handed
-  local active_frames = (#filtered_frames > 0) and filtered_frames or frames
+  -- If filter is enabled and all frames were filtered out, do not silently restore
+  local active_frames = filter_vendor and filtered_frames or frames
 
   local files = {}
   local file_map = {} -- keyed by file path -> index in files list

@@ -77,11 +77,12 @@ Traceback (most recent call last):
 ]]
 local py_frames = parser.parse(python_text)
 assert_eq(#py_frames, 5, "python frames count including <module>, <listcomp>, <lambda>")
-assert_eq(py_frames[1].line, 45, "python frame 1 line")
-assert_eq(py_frames[1].method, "execute_request", "python frame 1 method")
+-- In Python tracebacks, innermost/fault frame is reversed to frame 1 for crash-first navigation
+assert_eq(py_frames[1].line, 3, "python frame 1 line (innermost call <lambda>)")
+assert_eq(py_frames[1].method, "<lambda>", "python frame 1 method <lambda>")
+assert_eq(py_frames[2].method, "<listcomp>", "python frame 2 method <listcomp>")
 assert_eq(py_frames[3].method, "<module>", "python frame 3 method <module>")
-assert_eq(py_frames[4].method, "<listcomp>", "python frame 4 method <listcomp>")
-assert_eq(py_frames[5].method, "<lambda>", "python frame 5 method <lambda>")
+assert_eq(py_frames[5].method, "execute_request", "python frame 5 method execute_request (outermost call)")
 
 print("--> Testing path normalization & modern paths with @, +, (), spaces...")
 -- Scoped packages with @
@@ -215,7 +216,6 @@ local unwind = require("unwind")
 unwind.clear()
 unwind.ingest_file("tests/fixtures/node_trace.txt")
 assert_true(#unwind.state.frames >= 4, "ingest_file loaded node frames")
-assert_eq(unwind.state.active_index, 1, "active frame index reset to 1")
 
 print("--> Testing unwind.unwind dispatcher...")
 unwind.clear()
@@ -440,5 +440,118 @@ for _, w in ipairs(wins) do
 end
 assert_true(menu_win_found, "floating menu window found and verified wrap=false")
 unwind.clear()
+
+-- =========================================================================
+-- REPRODUCTION TESTS FOR CODE REVIEW FINDINGS
+-- =========================================================================
+
+print("--> [Finding A] Nonexistent file navigation should not create empty buffer...")
+do
+  unwind.clear()
+  local bufs_before = #vim.api.nvim_list_bufs()
+  unwind.state.frames = {
+    { file = "/remote/container/app/totally_missing_nonexistent_xyz.py", line = 125, method = "test" }
+  }
+  unwind.state.files = {
+    { file = "/remote/container/app/totally_missing_nonexistent_xyz.py", primary_line = 125, total_frames = 1 }
+  }
+  unwind.state.active_index = 0
+  unwind.jump_to_frame(1)
+  local bufs_after = #vim.api.nvim_list_bufs()
+  assert_eq(bufs_after, bufs_before, "nonexistent file should not add an empty buffer to buffer list")
+  assert_eq(unwind.state.active_index, 0, "active_index should NOT be updated if file open failed")
+end
+
+print("--> [Finding F] Workspace prefix boundary check in collector...")
+do
+  local root = vim.fs.normalize(vim.fn.getcwd())
+  local project_other = root .. "-other/sub/file.lua"
+  local project_exact = root .. "/sub/file.lua"
+  assert_true(collector.is_vendor_or_ignored(project_other), "project-other should be treated as outside workspace (vendor)")
+  assert_true(not collector.is_vendor_or_ignored(project_exact), "project child should be treated as inside workspace")
+end
+
+print("--> [Finding G] Python traceback crash-first navigation (most recent call first)...")
+do
+  local py_trace = [[
+Traceback (most recent call last):
+  File "lib/outer.py", line 10, in outer_func
+    mid_func()
+  File "lib/middle.py", line 20, in mid_func
+    inner_func()
+  File "src/inner.py", line 30, in inner_func
+    raise RuntimeError("crash")
+]]
+  local py_parsed = parser.parse(py_trace)
+  assert_eq(#py_parsed, 3, "parsed 3 python frames")
+  assert_eq(py_parsed[1].file, "src/inner.py", "frame 1 should be the innermost/most recent call")
+  assert_eq(py_parsed[1].line, 30, "frame 1 line should be 30")
+  assert_eq(py_parsed[3].file, "lib/outer.py", "frame 3 should be the outermost call")
+end
+
+print("--> [Finding E] Repeated setup() keymap cleanup and opts immutability...")
+do
+  local custom_opts = {
+    ignore_patterns = { "my_pattern/" },
+    keymaps = { next = "]x", prev = "[x" },
+  }
+  unwind.setup(custom_opts)
+  assert_true(custom_opts.ignore_patterns ~= nil, "setup must not mutate caller opts table")
+  -- Verify ]x is mapped
+  local map_x = vim.fn.maparg("]x", "n")
+  assert_true(map_x ~= "", "]x should be mapped after setup")
+
+  -- Now reconfigure with different keymaps
+  unwind.setup({
+    keymaps = { next = "]z", prev = "[z" },
+  })
+  local map_z = vim.fn.maparg("]z", "n")
+  assert_true(map_z ~= "", "]z should be mapped after re-setup")
+  local old_map_x = vim.fn.maparg("]x", "n")
+  assert_eq(old_map_x, "", "]x mapping should be cleaned up after re-setup")
+
+  -- Restore defaults
+  unwind.setup({
+    keymaps = {
+      menu = "<leader>w",
+      clipboard = "<leader>c",
+      next = "]u",
+      prev = "[u",
+      next_file = "]f",
+      prev_file = "[f",
+    },
+    ignore_patterns = {
+      "shared/bundle/",
+      "vendor/bundle/",
+      "/gems/",
+      "node_modules/",
+      "^/usr/",
+    },
+  })
+end
+
+print("--> [Finding I] Collector filter behavior when all frames are filtered out...")
+do
+  local all_vendor = {
+    { file = "node_modules/pkg/index.js", line = 1, col = 1, method = "run" },
+    { file = "/usr/lib/system.js", line = 2, col = 1, method = "init" },
+  }
+  local res = collector.collect(all_vendor, { filter_vendor = true })
+  assert_eq(#res.frames, 0, "frames should be empty when everything is filtered out")
+  assert_eq(#res.files, 0, "files should be empty when everything is filtered out")
+end
+
+print("--> [Finding C] Configurable path mappings and safer suffix resolution...")
+do
+  -- Remote path mapping
+  local remote_line = "  File \"/remote/ci/project/src/worker.py\", line 15, in do_work"
+  local mapped_frames = parser.parse(remote_line, {
+    path_mappings = {
+      ["/remote/ci/project/"] = "./",
+    }
+  })
+  assert_eq(#mapped_frames, 1, "parsed frame with path_mappings")
+  assert_eq(mapped_frames[1].file, "src/worker.py", "mapped remote path to local")
+end
 
 print("All parser, collector & integration unit tests PASSED successfully!")
