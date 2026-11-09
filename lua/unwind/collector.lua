@@ -27,6 +27,15 @@ function M.is_vendor_or_ignored(fpath, ignore_patterns)
     end
   end
 
+  -- Check if path is absolute and outside current working directory
+  if fpath:sub(1, 1) == "/" or fpath:match("^%a:[/\\]") then
+    local cwd = vim.fs.normalize(vim.fn.getcwd())
+    local norm = vim.fs.normalize(fpath)
+    if not vim.startswith(norm, cwd) then
+      return true
+    end
+  end
+
   return false
 end
 

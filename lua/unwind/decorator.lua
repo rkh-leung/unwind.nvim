@@ -5,6 +5,7 @@
 local M = {}
 
 local ns = vim.api.nvim_create_namespace("unwind_diagnostics")
+local last_buf = nil
 
 --- Get namespace ID
 ---@return number
@@ -12,17 +13,16 @@ function M.get_namespace()
   return ns
 end
 
---- Clear all unwind diagnostics extmarks across all buffers or for a specific buffer
----@param bufnr? number If nil, clears across all loaded buffers
+--- Clear all unwind diagnostics extmarks for a specific buffer or the last decorated buffer
+---@param bufnr? number If nil, clears the last decorated buffer
 function M.clear(bufnr)
   if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
     vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
-  else
-    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-      if vim.api.nvim_buf_is_valid(buf) then
-        vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
-      end
-    end
+  elseif last_buf and vim.api.nvim_buf_is_valid(last_buf) then
+    vim.api.nvim_buf_clear_namespace(last_buf, ns, 0, -1)
+  end
+  if not bufnr or bufnr == last_buf then
+    last_buf = nil
   end
 end
 
@@ -55,7 +55,6 @@ end
 --- Virtual line content:
 ---   Badge/Header:   ✕ [CALL STACK FAULT] Frame #<depth>[/<total>]: <method>() (highlighted via DiagnosticError / DiagnosticSignError)
 ---   Details line:     ↳ <file>:<line> (highlighted via Comment or DiagnosticVirtualTextInfo)
---- Configuration options: virt_lines_overflow = "scroll" and strict = false
 ---@param bufnr number Buffer handle
 ---@param line number 1-indexed target line number
 ---@param depth number 1-indexed stack frame depth
@@ -64,11 +63,11 @@ end
 ---@param total_frames? number Total stack frames count
 ---@return number|nil extmark_id
 function M.render(bufnr, line, depth, method, file, total_frames)
-  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) or not vim.api.nvim_buf_is_loaded(bufnr) then
     return nil
   end
 
-  -- Clear previous decorations across all buffers so only the active frame is marked
+  -- Clear previous decorations so only the active frame is marked
   M.clear()
 
   local line_count = vim.api.nvim_buf_line_count(bufnr)
@@ -92,17 +91,13 @@ function M.render(bufnr, line, depth, method, file, total_frames)
     strict = false,
   }
 
-  -- In Neovim, test if virt_lines_overflow is supported; if error occurs, fallback without it
-  local test_opts = vim.tbl_extend("force", opts, { virt_lines_overflow = "scroll" })
-  local ok, extmark_id = pcall(vim.api.nvim_buf_set_extmark, bufnr, ns, zero_based_line, 0, test_opts)
-  if not ok then
-    ok, extmark_id = pcall(vim.api.nvim_buf_set_extmark, bufnr, ns, zero_based_line, 0, opts)
-    if not ok then
-      return nil
-    end
+  local ok, extmark_id = pcall(vim.api.nvim_buf_set_extmark, bufnr, ns, zero_based_line, 0, opts)
+  if ok then
+    last_buf = bufnr
+    return extmark_id
   end
 
-  return extmark_id
+  return nil
 end
 
 return M

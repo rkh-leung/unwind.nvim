@@ -13,6 +13,9 @@ function M.close()
   if active_win and vim.api.nvim_win_is_valid(active_win) then
     vim.api.nvim_win_close(active_win, true)
   end
+  if active_buf and vim.api.nvim_buf_is_valid(active_buf) then
+    pcall(vim.api.nvim_buf_delete, active_buf, { force = true })
+  end
   active_win = nil
   active_buf = nil
 end
@@ -21,6 +24,9 @@ end
 function M.close_input()
   if input_win and vim.api.nvim_win_is_valid(input_win) then
     vim.api.nvim_win_close(input_win, true)
+  end
+  if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+    pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
   end
   input_win = nil
   input_buf = nil
@@ -77,7 +83,13 @@ function M.open(files, on_select)
     if item.is_vendor then
       frame_suffix = frame_suffix .. " [vendor]"
     end
-    local padding_len = math.max(2, (win_width - 2) - #prefix - #frame_suffix - 2)
+
+    local max_prefix = (win_width - 2) - #frame_suffix - 3
+    if #prefix > max_prefix and max_prefix > 8 then
+      prefix = prefix:sub(1, max_prefix - 3) .. "..."
+    end
+
+    local padding_len = math.max(2, (win_width - 2) - #prefix - #frame_suffix)
     local line_str = prefix .. string.rep(" ", padding_len) .. frame_suffix
     table.insert(lines, line_str)
   end
@@ -160,10 +172,6 @@ function M.open(files, on_select)
     M.close()
   end, keymap_opts)
 
-  -- j / k: Standard navigation (already standard in normal mode, but explicit mapping keeps it clean)
-  vim.keymap.set("n", "j", "j", keymap_opts)
-  vim.keymap.set("n", "k", "k", keymap_opts)
-
   -- Clean up active_win/active_buf on BufWipeout
   vim.api.nvim_create_autocmd("BufWipeout", {
     buffer = buf,
@@ -222,12 +230,19 @@ function M.open_input(on_submit)
   vim.wo[win].winhighlight = "Normal:NormalFloat,FloatBorder:FloatBorder,CursorLine:PmenuSel"
 
   local function submit()
-    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-    local text = table.concat(lines, "\n")
-    M.close_input()
-    if on_submit then
-      on_submit(text)
+    if not input_buf or not vim.api.nvim_buf_is_valid(input_buf) then
+      return
     end
+    local lines = vim.api.nvim_buf_get_lines(input_buf, 0, -1, false)
+    local text = table.concat(lines, "\n")
+    vim.bo[input_buf].modified = false
+    vim.cmd("stopinsert")
+    vim.schedule(function()
+      M.close_input()
+      if on_submit then
+        on_submit(text)
+      end
+    end)
   end
 
   local keymap_opts = { noremap = true, silent = true, buffer = buf }
