@@ -10,6 +10,7 @@ local M = {}
 
 --- Internal state
 M.state = {
+  root = nil,
   raw_frames = {},
   frames = {},
   files = {},
@@ -47,11 +48,14 @@ M._installed_keymaps = {}
 
 --- Centralized keymap installer with ownership tracking
 ---@param keymaps table|boolean|nil Keymap table or false to disable
----@param preserve_existing? boolean If true, only sets mapping if not already mapped
-function M.install_keymaps(keymaps, preserve_existing)
-  -- Remove only mappings that Unwind previously installed
+---@param force? boolean If true, overrides existing non-Unwind keymaps
+function M.install_keymaps(keymaps, force)
+  -- Remove only mappings that Unwind previously installed and currently owns
   for _, lhs in ipairs(M._installed_keymaps) do
-    pcall(vim.keymap.del, "n", lhs)
+    local map = vim.fn.maparg(lhs, "n", false, true)
+    if map and map.desc and map.desc:match("^Unwind:") then
+      pcall(vim.keymap.del, "n", lhs)
+    end
   end
   M._installed_keymaps = {}
 
@@ -61,7 +65,11 @@ function M.install_keymaps(keymaps, preserve_existing)
 
   local function register_key(lhs, fn, desc)
     if lhs and lhs ~= "" then
-      if not preserve_existing or vim.fn.maparg(lhs, "n") == "" then
+      local existing = vim.fn.maparg(lhs, "n", false, true)
+      local is_empty = not existing or existing.lhs == nil or existing.lhs == ""
+      local is_unwind = existing and existing.desc and existing.desc:match("^Unwind:")
+
+      if is_empty or is_unwind or force then
         vim.keymap.set("n", lhs, fn, { desc = desc, silent = true })
         table.insert(M._installed_keymaps, lhs)
       end
@@ -89,9 +97,12 @@ function M.setup(opts)
     M.config.keymaps = false
     user_opts.keymaps = nil
   end
+  local force = user_opts.force_keymaps or false
+  user_opts.force_keymaps = nil
+
   M.config = vim.tbl_deep_extend("force", M.config, user_opts)
 
-  M.install_keymaps(M.config.keymaps, false)
+  M.install_keymaps(M.config.keymaps, force)
 end
 
 --- Clear active decorations and state
@@ -99,6 +110,7 @@ function M.clear()
   decorator.clear()
   ui.close()
   ui.close_input()
+  M.state.root = nil
   M.state.raw_frames = {}
   M.state.frames = {}
   M.state.files = {}
@@ -127,16 +139,28 @@ function M.jump_to_frame(idx)
   end
 
   local frame = M.state.frames[idx]
+  if parser.is_non_navigable_path(frame.file) then
+    vim.notify("Unwind: Non-navigable frame: " .. tostring(frame.file), vim.log.levels.WARN)
+    return false
+  end
 
-  -- Open the target file or switch to existing loaded buffer
-  local target_path = vim.fs.normalize(frame.file)
+  -- Ensure we are navigating in a source window, never inside an Unwind float
+  ui.ensure_source_window()
+
+  -- Use resolved_path as immutable target if present, otherwise frame.file
+  local target_path = frame.resolved_path or frame.file
+  local root = M.state.root or vim.fn.getcwd()
+  if target_path:sub(1, 1) ~= "/" and not target_path:match("^%a:[/\\]") then
+    target_path = root .. "/" .. target_path
+  end
+  target_path = vim.fs.normalize(target_path)
+
   local current_path = vim.fs.normalize(vim.api.nvim_buf_get_name(0))
 
   if target_path ~= current_path then
-    local target_full = vim.fs.normalize(vim.fn.fnamemodify(frame.file, ":p"))
     local existing_buf = vim.fn.bufnr(target_path)
-    if existing_buf == -1 then
-      existing_buf = vim.fn.bufnr(target_full)
+    if existing_buf == -1 and frame.file then
+      existing_buf = vim.fn.bufnr(frame.file)
     end
 
     local already_loaded = existing_buf ~= -1
@@ -147,7 +171,7 @@ function M.jump_to_frame(idx)
       vim.api.nvim_set_current_buf(existing_buf)
     else
       -- Check filesystem stat before edit to prevent creating empty persistent buffers
-      local stat = (vim.uv or vim.loop).fs_stat(target_full)
+      local stat = (vim.uv or vim.loop).fs_stat(target_path)
       if not stat or stat.type ~= "file" then
         stat = (vim.uv or vim.loop).fs_stat(frame.file)
       end
@@ -157,7 +181,13 @@ function M.jump_to_frame(idx)
         return false
       end
 
-      local ok, err = pcall(vim.cmd.edit, vim.fn.fnameescape(frame.file))
+      local edit_target = target_path
+      local ok, err = pcall(vim.cmd.edit, vim.fn.fnameescape(edit_target))
+      if not ok then
+        -- Try with frame.file fallback
+        ok, err = pcall(vim.cmd.edit, vim.fn.fnameescape(frame.file))
+      end
+
       if not ok then
         vim.notify("Unwind: Could not open file " .. tostring(frame.file) .. ": " .. tostring(err), vim.log.levels.ERROR)
         return false
@@ -179,10 +209,14 @@ function M.jump_to_frame(idx)
 
   -- Navigation succeeded! Now commit active indices
   M.state.active_index = idx
-  for f_idx, f_entry in ipairs(M.state.files) do
-    if f_entry.file == frame.file then
-      M.state.active_file_index = f_idx
-      break
+  if frame.file_index and M.state.files[frame.file_index] then
+    M.state.active_file_index = frame.file_index
+  else
+    for f_idx, f_entry in ipairs(M.state.files) do
+      if (f_entry.resolved_path and f_entry.resolved_path == frame.resolved_path) or f_entry.file == frame.file then
+        M.state.active_file_index = f_idx
+        break
+      end
     end
   end
 
@@ -209,17 +243,22 @@ function M.jump_to_file(file_idx)
   end
 
   local file_entry = M.state.files[file_idx]
+  if file_entry.primary_frame_index and M.state.frames[file_entry.primary_frame_index] then
+    return M.jump_to_frame(file_entry.primary_frame_index)
+  end
 
   -- Find the first frame corresponding to this file
   for idx, frame in ipairs(M.state.frames) do
-    if frame.file == file_entry.file and frame.line == file_entry.primary_line then
-      return M.jump_to_frame(idx)
+    if (frame.resolved_path and frame.resolved_path == file_entry.resolved_path) or frame.file == file_entry.file then
+      if frame.line == file_entry.primary_line then
+        return M.jump_to_frame(idx)
+      end
     end
   end
 
   -- Fallback if exact line frame was somehow not matched
   for idx, frame in ipairs(M.state.frames) do
-    if frame.file == file_entry.file then
+    if (frame.resolved_path and frame.resolved_path == file_entry.resolved_path) or frame.file == file_entry.file then
       return M.jump_to_frame(idx)
     end
   end
@@ -227,56 +266,78 @@ function M.jump_to_file(file_idx)
   return false
 end
 
---- Cycle sequentially to next unique file
+--- Cycle sequentially to next unique file (skipping unresolvable files)
 function M.next_file()
-  if #M.state.files == 0 then
+  local total = #M.state.files
+  if total == 0 then
     vim.notify("Unwind: No active stacktrace files.", vim.log.levels.WARN)
     return
   end
-  local next_fidx = (M.state.active_file_index or 0) + 1
-  if next_fidx > #M.state.files then
-    next_fidx = 1
+  local start = M.state.active_file_index or 0
+  for offset = 1, total do
+    local candidate = ((start + offset - 1) % total) + 1
+    if M.jump_to_file(candidate) then
+      return
+    end
   end
-  M.jump_to_file(next_fidx)
+  vim.notify("Unwind: None of the stacktrace files could be opened.", vim.log.levels.WARN)
 end
 
---- Cycle sequentially to previous unique file
+--- Cycle sequentially to previous unique file (skipping unresolvable files)
 function M.prev_file()
-  if #M.state.files == 0 then
+  local total = #M.state.files
+  if total == 0 then
     vim.notify("Unwind: No active stacktrace files.", vim.log.levels.WARN)
     return
   end
-  local prev_fidx = (M.state.active_file_index or 0) - 1
-  if prev_fidx < 1 then
-    prev_fidx = #M.state.files
+  local start = M.state.active_file_index or 1
+  for offset = 1, total do
+    local candidate = ((start - offset - 1) % total) + 1
+    if candidate <= 0 then
+      candidate = candidate + total
+    end
+    if M.jump_to_file(candidate) then
+      return
+    end
   end
-  M.jump_to_file(prev_fidx)
+  vim.notify("Unwind: None of the stacktrace files could be opened.", vim.log.levels.WARN)
 end
 
---- Cycle sequentially to next stack frame
+--- Cycle sequentially to next stack frame (skipping unresolvable frames)
 function M.next()
-  if #M.state.frames == 0 then
+  local total = #M.state.frames
+  if total == 0 then
     vim.notify("Unwind: No active stacktrace.", vim.log.levels.WARN)
     return
   end
-  local next_idx = M.state.active_index + 1
-  if next_idx > #M.state.frames then
-    next_idx = 1
+  local start = M.state.active_index or 0
+  for offset = 1, total do
+    local candidate = ((start + offset - 1) % total) + 1
+    if M.jump_to_frame(candidate) then
+      return
+    end
   end
-  M.jump_to_frame(next_idx)
+  vim.notify("Unwind: None of the stacktrace frames could be opened.", vim.log.levels.WARN)
 end
 
---- Cycle sequentially to previous stack frame
+--- Cycle sequentially to previous stack frame (skipping unresolvable frames)
 function M.prev()
-  if #M.state.frames == 0 then
+  local total = #M.state.frames
+  if total == 0 then
     vim.notify("Unwind: No active stacktrace.", vim.log.levels.WARN)
     return
   end
-  local prev_idx = M.state.active_index - 1
-  if prev_idx < 1 then
-    prev_idx = #M.state.frames
+  local start = M.state.active_index or 1
+  for offset = 1, total do
+    local candidate = ((start - offset - 1) % total) + 1
+    if candidate <= 0 then
+      candidate = candidate + total
+    end
+    if M.jump_to_frame(candidate) then
+      return
+    end
   end
-  M.jump_to_frame(prev_idx)
+  vim.notify("Unwind: None of the stacktrace frames could be opened.", vim.log.levels.WARN)
 end
 
 --- Re-apply collection and update state with current filter setting
@@ -319,6 +380,12 @@ function M.toggle_filter()
 end
 
 --- Ingest a raw plain-text stacktrace string
+--- Transactional:
+---   1. Parse & resolve with current root
+---   2. Collect & deduplicate
+---   3. Commit new state
+---   4. Clear prior presentations/decorations
+---   5. Attempt initial navigation
 ---@param text string
 function M.ingest(text)
   if not text or text == "" then
@@ -332,7 +399,9 @@ function M.ingest(text)
     text = text:sub(1, max_bytes)
   end
 
+  local root = vim.fs.normalize(vim.fn.getcwd())
   local frames = parser.parse(text, {
+    root = root,
     path_mappings = M.config.path_mappings,
     max_frames = M.config.max_frames,
   })
@@ -341,17 +410,24 @@ function M.ingest(text)
     return
   end
 
-  M.state.raw_frames = frames
-  M.state.filter_enabled = M.config.filter_out_of_project or false
-
+  local filter_enabled = M.config.filter_out_of_project or false
   local collected = collector.collect(frames, {
-    filter_vendor = M.state.filter_enabled,
+    root = root,
+    filter_vendor = filter_enabled,
     ignore_patterns = M.config.ignore_patterns,
   })
+
+  -- Commit state transactionally
+  M.state.root = root
+  M.state.raw_frames = frames
+  M.state.filter_enabled = filter_enabled
   M.state.frames = collected.frames
   M.state.files = collected.files
   M.state.active_index = 0
   M.state.active_file_index = 0
+
+  -- Clear previous decorations now that state is updated
+  decorator.clear()
 
   if #M.state.frames == 0 then
     vim.notify("Unwind: All recognized frames were filtered out as vendor/external files.", vim.log.levels.WARN)
@@ -360,8 +436,8 @@ function M.ingest(text)
 
   vim.notify(string.format("Unwind: Loaded %d frames across %d files.", #M.state.frames, #collected.files), vim.log.levels.INFO)
 
-  -- Jump to the first frame immediately
-  M.jump_to_frame(1)
+  -- Jump to the first navigable frame
+  M.next()
 end
 
 --- Ingest stacktrace from clipboard register '+'

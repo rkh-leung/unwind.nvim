@@ -16,6 +16,7 @@ local function snapshot()
   collectgarbage("collect")
   return {
     buffers = #vim.api.nvim_list_bufs(),
+    windows = #vim.api.nvim_list_wins(),
     autocmds = count_autocmds(),
     heap_kb = collectgarbage("count"),
   }
@@ -39,6 +40,9 @@ local after = snapshot()
 
 assert(after.buffers == before.buffers,
   string.format("UI buffers retained after cleanup: before %d, after %d", before.buffers, after.buffers))
+
+assert(after.windows == before.windows,
+  string.format("UI windows retained after cleanup: before %d, after %d", before.windows, after.windows))
 
 assert(after.autocmds == before.autocmds,
   string.format("Autocommands retained after cleanup: before %d, after %d", before.autocmds, after.autocmds))
@@ -67,6 +71,9 @@ print("Repeated ingestion/clear lifecycle test passed.")
 
 -- Test Lua memory / heap growth across repeated batches
 print("--> Testing Lua heap growth across repeated batches...")
+local orig_notify = vim.notify
+vim.notify = function() end -- Stub notify during heap test to prevent notification memory contamination
+
 local function exercise_plugin()
   unwind.ingest(sample_trace)
   ui.open(unwind.state.files, function() end)
@@ -88,6 +95,8 @@ end
 
 collectgarbage("collect")
 local final_kb = collectgarbage("count")
+
+vim.notify = orig_notify -- Restore notify
 
 local growth_kb = final_kb - baseline_kb
 -- Generous allowable growth threshold (256 KB) to guard against unbounded linear leaks
