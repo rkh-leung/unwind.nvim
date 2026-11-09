@@ -26,22 +26,6 @@ There are zero external binary dependencies (no Rust CLI, no external JSON parsi
 
 ---
 
-## Understanding Frames vs. Files
-
-### What is a Stack Frame, and Why Are There Multiples per File?
-In runtime crash dumps and tracebacks, a **stack frame** represents a single activation record / function call currently on the call execution stack.
-
-When you see multiple frames associated with one file:
-- **Middleware and Callback Chains**: Libraries like Rails `ActiveSupport` or `ActiveRecord` often execute through deep chains of callbacks, instrumentation blocks, and query wrappers within the same file (e.g., 27 frames inside `callbacks.rb`).
-- **Nested Functions & Blocks**: Multiple blocks or nested method calls inside the same file appear as separate frames at different line numbers.
-- **Recursion**: Recursive functions produce a new frame for every recursive depth level.
-
-### Frame Navigation vs. File Navigation
-- **Frame Cycling (`]u` / `[u`)**: Steps through every individual execution frame in the call stack sequentially. If a file has 27 frames (such as an internal framework wrapper), pressing `]u` steps through each of those 27 frames line-by-line.
-- **File Cycling (`]f` / `[f`)**: Jumps directly between **unique implicated files** at their primary fault lines (identical to jumping from the `<leader>w` menu, but as a direct keybinding). Use `]f` / `[f` when you want to quickly navigate between distinct codebase files without stepping through repetitive internal frames.
-
----
-
 ## Handling Third-Party & Vendor Stacktraces
 
 Crash traces frequently contain deep stack frames from external packages and installed bundles that are not part of your application repository (e.g., `/apps/.../shared/bundle/ruby/3.3.0/gems/...`, `vendor/bundle/`, `node_modules/`, `/usr/lib/`).
