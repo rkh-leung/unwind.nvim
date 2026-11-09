@@ -121,6 +121,7 @@ function M.open(files, on_select)
   active_win = win
 
   vim.wo[win].cursorline = true
+  vim.wo[win].wrap = false
   vim.wo[win].winhighlight = "Normal:NormalFloat,FloatBorder:FloatBorder,CursorLine:PmenuSel"
 
   local function select_idx(idx)
@@ -190,7 +191,7 @@ function M.open_input(on_submit)
   local buf = vim.api.nvim_create_buf(false, true)
   input_buf = buf
 
-  vim.api.nvim_buf_set_name(buf, "unwind://input")
+  pcall(vim.api.nvim_buf_set_name, buf, "unwind://input/" .. buf)
   vim.bo[buf].buftype = "acwrite"
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].swapfile = false
