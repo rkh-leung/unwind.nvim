@@ -261,8 +261,8 @@ assert_true(reopen_ok, "reopening input scratchpad should succeed without E95: "
 print("--> Testing vendor filtering and file navigation...")
 local vendor_trace = [[
 core/app/presenters/feed.rb:10:in `render'
-/apps/powershop/shared/bundle/ruby/3.3.0/gems/activesupport-8.1.3.1/lib/active_support/callbacks.rb:27:in `run'
-/apps/powershop/shared/bundle/ruby/3.3.0/gems/activesupport-8.1.3.1/lib/active_support/callbacks.rb:50:in `compile'
+/apps/myapp/shared/bundle/ruby/3.3.0/gems/activesupport-8.1.3.1/lib/active_support/callbacks.rb:27:in `run'
+/apps/myapp/shared/bundle/ruby/3.3.0/gems/activesupport-8.1.3.1/lib/active_support/callbacks.rb:50:in `compile'
 /usr/lib/x86_64-linux-gnu/ruby/3.3.0/delegate.rb:15:in `method_missing'
 app/models/brand.rb:5:in `name'
 ]]
@@ -285,7 +285,7 @@ vim.api.nvim_buf_set_name(feed_buf, vim.fs.normalize(vim.fn.getcwd()) .. "/core/
 vim.api.nvim_buf_set_lines(feed_buf, 0, -1, false, { "class Feed", "end" })
 
 local as_buf = vim.api.nvim_create_buf(false, true)
-vim.api.nvim_buf_set_name(as_buf, "/apps/powershop/shared/bundle/ruby/3.3.0/gems/activesupport-8.1.3.1/lib/active_support/callbacks.rb")
+vim.api.nvim_buf_set_name(as_buf, "/apps/myapp/shared/bundle/ruby/3.3.0/gems/activesupport-8.1.3.1/lib/active_support/callbacks.rb")
 vim.api.nvim_buf_set_lines(as_buf, 0, -1, false, { "module Callbacks", "end" })
 
 local del_buf = vim.api.nvim_create_buf(false, true)
