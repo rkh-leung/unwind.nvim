@@ -26,18 +26,44 @@ function M.clear(bufnr)
   end
 end
 
+--- Format the method header cleanly:
+--- If method is empty, nil, or generic "anonymous", omit it to avoid clutter.
+--- If method already has parentheses or brackets (e.g. `<main>`, `<top>`), don't add redundant `()`.
+---@param depth number
+---@param method? string
+---@param total_frames? number
+---@return string
+local function format_header(depth, method, total_frames)
+  local depth_str = tostring(depth)
+  if total_frames and total_frames > 0 then
+    depth_str = depth_str .. "/" .. tostring(total_frames)
+  end
+
+  if not method or method == "" or method == "anonymous" then
+    return "  ✕ [CALL STACK FAULT] Frame #" .. depth_str
+  end
+
+  local method_str = method
+  if not method:find("%(") and not method:find("^<.*>$") then
+    method_str = method .. "()"
+  end
+
+  return "  ✕ [CALL STACK FAULT] Frame #" .. depth_str .. ": " .. method_str
+end
+
 --- Render call-stack telemetry above the given line in bufnr
 --- Virtual line content:
----   Badge/Header:   ✕ [CALL STACK FAULT] Frame #<depth>: <method>() (highlighted via DiagnosticError / DiagnosticSignError)
+---   Badge/Header:   ✕ [CALL STACK FAULT] Frame #<depth>[/<total>]: <method>() (highlighted via DiagnosticError / DiagnosticSignError)
 ---   Details line:     ↳ <file>:<line> (highlighted via Comment or DiagnosticVirtualTextInfo)
 --- Configuration options: virt_lines_overflow = "scroll" and strict = false
 ---@param bufnr number Buffer handle
 ---@param line number 1-indexed target line number
 ---@param depth number 1-indexed stack frame depth
----@param method string Frame method name
+---@param method? string Frame method name
 ---@param file string Frame file path
+---@param total_frames? number Total stack frames count
 ---@return number|nil extmark_id
-function M.render(bufnr, line, depth, method, file)
+function M.render(bufnr, line, depth, method, file, total_frames)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
     return nil
   end
@@ -49,11 +75,11 @@ function M.render(bufnr, line, depth, method, file)
   local target_line = math.max(1, math.min(line or 1, line_count))
   local zero_based_line = target_line - 1
 
-  local method_str = (method and method ~= "") and (method .. "()") or "anonymous()"
+  local header_text = format_header(depth, method, total_frames)
 
   local virt_lines = {
     {
-      { "  ✕ [CALL STACK FAULT] Frame #" .. tostring(depth) .. ": " .. method_str, "DiagnosticError" },
+      { header_text, "DiagnosticError" },
     },
     {
       { "    ↳ " .. tostring(file) .. ":" .. tostring(line), "DiagnosticVirtualTextInfo" },

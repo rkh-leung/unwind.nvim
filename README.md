@@ -20,7 +20,36 @@ There are zero external binary dependencies (no Rust CLI, no external JSON parsi
   - Generic fallback (`([%w_%-./\\]+%.%w+):(%d+):?(%d*)`)
 - **Intelligent Path Normalization**: Automatically strips container and virtual prefixes (e.g. `/app/`, `/var/task/`, `C:\workspace\`) to map to local files relative to `vim.fn.getcwd()`.
 - **Harpoon-Style Floating Menu**: Centered floating scratch window listing distinct files in occurrence order with frame counts, quick jump (`<CR>`, `1`–`9`), and wipeout on exit.
-- **Inline Virtual Line Telemetry**: Extended mark (`virt_lines`) decorations above fault lines with frame depth, method name, file, and line information.
+- **Inline Virtual Line Telemetry**: Extended mark (`virt_lines`) decorations above fault lines with frame depth (`#depth/total`), method name (omitting noisy `anonymous()` placeholders), file, and line information.
+- **Vendor / Gem / Library Filtering**: Automatically flags or collapses non-workspace third-party library frames (e.g. `shared/bundle/ruby/...`, `/gems/`, `vendor/bundle/`, `node_modules/`, `/usr/lib/`).
+- **File vs. Frame Cycling**: Instant file-by-file navigation (`]f` / `[f`) alongside detailed frame-by-frame stepping (`]u` / `[u`).
+
+---
+
+## Understanding Frames vs. Files
+
+### What is a Stack Frame, and Why Are There Multiples per File?
+In runtime crash dumps and tracebacks, a **stack frame** represents a single activation record / function call currently on the call execution stack.
+
+When you see multiple frames associated with one file:
+- **Middleware and Callback Chains**: Libraries like Rails `ActiveSupport` or `ActiveRecord` often execute through deep chains of callbacks, instrumentation blocks, and query wrappers within the same file (e.g., 27 frames inside `callbacks.rb`).
+- **Nested Functions & Blocks**: Multiple blocks or nested method calls inside the same file appear as separate frames at different line numbers.
+- **Recursion**: Recursive functions produce a new frame for every recursive depth level.
+
+### Frame Navigation vs. File Navigation
+- **Frame Cycling (`]u` / `[u`)**: Steps through every individual execution frame in the call stack sequentially. If a file has 27 frames (such as an internal framework wrapper), pressing `]u` steps through each of those 27 frames line-by-line.
+- **File Cycling (`]f` / `[f`)**: Jumps directly between **unique implicated files** at their primary fault lines (identical to jumping from the `<leader>w` menu, but as a direct keybinding). Use `]f` / `[f` when you want to quickly navigate between distinct codebase files without stepping through repetitive internal frames.
+
+---
+
+## Handling Third-Party & Vendor Stacktraces
+
+Crash traces frequently contain deep stack frames from external packages and installed bundles that are not part of your application repository (e.g., `/apps/.../shared/bundle/ruby/3.3.0/gems/...`, `vendor/bundle/`, `node_modules/`, `/usr/lib/`).
+
+`unwind.nvim` handles this seamlessly:
+1. **Visual Tagging**: The floating menu (`<leader>w`) identifies and tags external paths with `[vendor]`.
+2. **Filtering**: You can toggle hiding external vendor traces on the fly with `:UnwindToggleFilter`.
+3. **Workspace-Only by Default**: Enable `filter_out_of_project = true` in your setup configuration to hide vendor and out-of-workspace files automatically upon ingestion, keeping only your project's codebase files in view.
 
 ---
 
@@ -67,11 +96,16 @@ Once ingested:
 - **Cycle Through Frames**:
   - `]u` (or `:UnwindNext`): Jump to the next stack frame down the call stack.
   - `[u` (or `:UnwindPrev`): Jump to the previous stack frame up the call stack.
+- **Cycle Through Distinct Files Directly**:
+  - `]f` (or `:UnwindNextFile`): Jump immediately to the next unique file at its primary fault line.
+  - `[f` (or `:UnwindPrevFile`): Jump immediately to the previous unique file at its primary fault line.
 - **Harpoon-Style File Menu**:
   - Press `<leader>w` (or run `:UnwindMenu`) to open the floating menu showing unique implicated files in occurrence order.
   - Press `1` through `9` to jump directly to slot 1–9.
   - Press `<CR>` to jump to the selected file at its primary fault line.
   - Press `q` or `<Esc>` to dismiss the menu.
+- **Filter Vendor/Third-Party Traces**:
+  - Run `:UnwindToggleFilter` to toggle hiding/showing external vendor/library frames on demand.
 - **Clear Overlays**:
   - Run `:UnwindClear` whenever you want to dismiss all active decorations and reset state.
 
@@ -101,11 +135,21 @@ vim.cmd.packadd("unwind.nvim")
 
 -- Optionally customize configuration (single-key leader keymaps are configured by default):
 require("unwind").setup({
+  filter_out_of_project = false, -- Set to true to hide vendor/library frames by default
+  ignore_patterns = {            -- Custom patterns to identify vendor paths
+    "shared/bundle/",
+    "vendor/bundle/",
+    "/gems/",
+    "node_modules/",
+    "^/usr/",
+  },
   keymaps = {
     menu = "<leader>w",      -- Open Harpoon-style distinct files menu (single key)
     clipboard = "<leader>c", -- Ingest stacktrace from clipboard (+) (single key)
     next = "]u",             -- Jump to next stack frame
     prev = "[u",             -- Jump to previous stack frame
+    next_file = "]f",        -- Jump directly to next unique file
+    prev_file = "[f",        -- Jump directly to previous unique file
   },
 })
 ```
@@ -142,6 +186,9 @@ require("unwind").setup({
 | `:UnwindMenu` | Toggles the Harpoon-style floating distinct files menu |
 | `:UnwindNext` | Jumps to next stack frame with inline virtual line context |
 | `:UnwindPrev` | Jumps to previous stack frame with inline virtual line context |
+| `:UnwindNextFile` | Jumps directly to next unique file at primary fault line |
+| `:UnwindPrevFile` | Jumps directly to previous unique file at primary fault line |
+| `:UnwindToggleFilter` | Toggles filtering out vendor / third-party library files |
 | `:UnwindClear` | Clears active decorations, highlights, and state |
 
 ---
@@ -154,6 +201,8 @@ All leader keymaps use a single key after `<leader>`:
 - `<leader>c` -> Ingest from clipboard
 - `]u` -> Next stack frame
 - `[u` -> Previous stack frame
+- `]f` -> Next unique file
+- `[f` -> Previous unique file
 
 Inside the floating file menu:
 - `<CR>` -> Jump to selected file at primary fault line

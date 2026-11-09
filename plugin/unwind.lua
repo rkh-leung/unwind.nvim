@@ -41,6 +41,18 @@ vim.api.nvim_create_user_command("UnwindPrev", function()
   unwind.prev()
 end, { desc = "Jump to previous stack frame" })
 
+vim.api.nvim_create_user_command("UnwindNextFile", function()
+  unwind.next_file()
+end, { desc = "Jump to next stacktrace file" })
+
+vim.api.nvim_create_user_command("UnwindPrevFile", function()
+  unwind.prev_file()
+end, { desc = "Jump to previous stacktrace file" })
+
+vim.api.nvim_create_user_command("UnwindToggleFilter", function()
+  unwind.toggle_filter()
+end, { desc = "Toggle filtering out vendor and external library files" })
+
 vim.api.nvim_create_user_command("UnwindClear", function()
   unwind.clear()
 end, { desc = "Clear active decorations and state" })
