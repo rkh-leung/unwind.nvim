@@ -55,12 +55,22 @@ function M.get_source_window()
 end
 
 --- Ensures execution is targeting a source window, switching away from sidebar if needed
+--- Ensures execution is targeting a source window, switching away from sidebar if needed.
+--- If no other normal window exists, opens a normal split window rather than operating in the sidebar.
 function M.ensure_source_window()
   local cur_win = vim.api.nvim_get_current_win()
   if M.is_sidebar_window(cur_win) then
     local src_win = M.get_source_window()
     if src_win and src_win ~= cur_win and vim.api.nvim_win_is_valid(src_win) then
       pcall(vim.api.nvim_set_current_win, src_win)
+      return
+    end
+
+    -- If sidebar is the only normal window, create a new split
+    vim.cmd("leftabove vsplit")
+    local new_win = vim.api.nvim_get_current_win()
+    if new_win and new_win ~= cur_win then
+      remembered_source_win = new_win
     end
   end
 end
@@ -137,12 +147,14 @@ function M.render(session)
     end
   end
 
-  -- Footer
+  -- Footer: Always reserve a footer row so set_active() can reliably update it
   table.insert(lines, "")
   if session.active_index and session.active_index > 0 and session.frames and session.frames[session.active_index] then
     local act_frame = session.frames[session.active_index]
     local footer_text = string.format(" %d/%d %s:%d", session.active_index, #session.frames, act_frame.file, act_frame.line or 1)
     table.insert(lines, footer_text)
+  else
+    table.insert(lines, "")
   end
 
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
@@ -205,7 +217,10 @@ function M.set_active(session, index)
   vim.api.nvim_buf_clear_namespace(buf, ns_active, 0, -1)
 
   local file_entry = (frames[index].file_index and session.files) and session.files[frames[index].file_index] or nil
-  local is_avail = file_entry and (file_entry.available ~= false) or true
+  local is_avail = true
+  if file_entry then
+    is_avail = file_entry.available ~= false
+  end
 
   vim.api.nvim_buf_add_highlight(buf, ns_active, "UnwindSidebarActive", target_buf_line, 0, -1)
   if not is_avail then
@@ -281,7 +296,7 @@ function M.open(session, opts)
     local cursor = vim.api.nvim_win_get_cursor(0)
     local line_idx = cursor[1] -- 1-indexed line in buffer
     local frame_idx = line_idx - 2 -- frame 1 is line 3 (index 2 in 0-based)
-    if opts.on_select_frame and frame_idx >= 1 then
+    if opts.on_select_frame and frame_idx >= 1 and frame_idx <= #(session.frames or {}) then
       opts.on_select_frame(frame_idx)
     end
   end, key_opts)
@@ -290,7 +305,7 @@ function M.open(session, opts)
     local cursor = vim.api.nvim_win_get_cursor(0)
     local line_idx = cursor[1]
     local frame_idx = line_idx - 2
-    if opts.on_delete_frame and frame_idx >= 1 then
+    if opts.on_delete_frame and frame_idx >= 1 and frame_idx <= #(session.frames or {}) then
       opts.on_delete_frame(frame_idx)
     end
   end, key_opts)

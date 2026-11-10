@@ -150,9 +150,16 @@ function M.save(root, sessions)
     return false
   end
 
-  f:write(json_text)
-  f:flush()
+  local ok_write, write_err = f:write(json_text)
+  local ok_flush, flush_err = f:flush()
   f:close()
+
+  if not ok_write or not ok_flush then
+    pcall(os.remove, tmp_path)
+    local err_msg = tostring(write_err or flush_err or "write error")
+    vim.notify("Unwind: Failed to write session state: " .. err_msg, vim.log.levels.ERROR)
+    return false
+  end
 
   local ok_rename, err = os.rename(tmp_path, filepath)
   if not ok_rename then
@@ -202,6 +209,10 @@ function M.save_working(session, name, sessions, root)
     end
   end
 
+  local old_name = session.name
+  local old_saved = session.saved
+  local old_root = session.root
+
   session.name = trimmed
   session.saved = true
   session.root = vim.fs.normalize(root)
@@ -209,6 +220,16 @@ function M.save_working(session, name, sessions, root)
 
   local ok = M.save(root, sessions)
   if not ok then
+    -- Rollback
+    for idx, s in ipairs(sessions) do
+      if s == session then
+        table.remove(sessions, idx)
+        break
+      end
+    end
+    session.name = old_name
+    session.saved = old_saved
+    session.root = old_root
     return false, "Failed to write session to disk."
   end
 
@@ -234,9 +255,12 @@ function M.rename(session, new_name, sessions, root)
     end
   end
 
+  local old_name = session.name
   session.name = trimmed
   local ok = M.save(root, sessions)
   if not ok then
+    -- Rollback
+    session.name = old_name
     return false, "Failed to persist session rename."
   end
 
@@ -257,12 +281,23 @@ function M.delete(session, sessions, root)
     end
   end
 
-  if target_idx then
-    table.remove(sessions, target_idx)
+  if not target_idx then
+    return false
   end
 
+  table.remove(sessions, target_idx)
+  local old_saved = session.saved
   session.saved = false
-  return M.save(root, sessions)
+
+  local ok = M.save(root, sessions)
+  if not ok then
+    -- Rollback
+    table.insert(sessions, target_idx, session)
+    session.saved = old_saved
+    return false
+  end
+
+  return true
 end
 
 return M

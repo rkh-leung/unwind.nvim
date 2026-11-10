@@ -22,14 +22,14 @@ local function snapshot()
   }
 end
 
-local files = {
-  { file = "example.lua", total_frames = 1, is_vendor = false },
+local session_items = {
+  { type = "session", name = "Test Session", frame_count = 1 },
 }
 
 local before = snapshot()
 
 for _ = 1, 500 do
-  ui.open(files, function() end)
+  ui.open_session_manager(session_items, {})
   ui.close()
 
   ui.open_input(function() end)
@@ -76,7 +76,7 @@ vim.notify = function() end -- Stub notify during heap test to prevent notificat
 
 local function exercise_plugin()
   unwind.ingest(sample_trace)
-  ui.open(unwind.state.files, function() end)
+  ui.open_session_manager(session_items, {})
   ui.close()
   unwind.clear()
 end

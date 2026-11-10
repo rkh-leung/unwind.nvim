@@ -787,11 +787,11 @@ do
   local bufs_before = #vim.api.nvim_list_bufs()
 
   local ok_open = pcall(function()
-    ui.open({ { file = "test.lua", total_frames = 1 } }, function() end)
+    ui.open_session_manager({ { type = "session", name = "test.lua", frame_count = 1 } }, {})
   end)
-  assert_true(ok_open, "ui.open should not throw on small terminal")
+  assert_true(ok_open, "ui.open_session_manager should not throw on small terminal")
   local bufs_after_menu = #vim.api.nvim_list_bufs()
-  assert_eq(bufs_after_menu, bufs_before, "ui.open must not leak scratch buffer on small terminal early return")
+  assert_eq(bufs_after_menu, bufs_before, "ui.open_session_manager must not leak scratch buffer on small terminal early return")
 
   local ok_input = pcall(function()
     ui.open_input(function() end)
@@ -953,12 +953,12 @@ end
 
 print("--> [New Review Tests] Multibyte string display width in floating menu...")
 do
-  local multibyte_files = {
-    { file = "src/日本語/サービス.lua", total_frames = 2, is_vendor = false },
-    { file = "src/emoji_🚀_test.lua", total_frames = 1, is_vendor = true },
+  local multibyte_items = {
+    { type = "session", name = "src/日本語/サービス.lua", frame_count = 2 },
+    { type = "session", name = "src/emoji_🚀_test.lua", frame_count = 1 },
   }
   -- Should open and close without throwing any error
-  ui.open(multibyte_files, function() end)
+  ui.open_session_manager(multibyte_items, {})
   assert_true(ui.is_floating(), "menu window is open and floating")
   ui.close()
   assert_true(not ui.is_floating(), "menu window is closed")
@@ -972,7 +972,7 @@ do
   vim.api.nvim_win_set_buf(win1, test_buf1)
 
   -- Open floating menu
-  ui.open({ { file = "dummy.lua", total_frames = 1, is_vendor = false } }, function() end)
+  ui.open_session_manager({ { type = "session", name = "dummy.lua", frame_count = 1 } }, {})
 
   -- Create a second normal window and move focus to it while float is open
   vim.cmd("vsplit")
@@ -1296,5 +1296,269 @@ do
   assert_true(not save_called, "prev_file() must not write to disk")
 
   test_sessions.save = orig_save
+  unwind.clear()
+end
+
+-- =========================================================================
+-- REGRESSION TESTS FOR REVIEW FINDINGS (P1/P2/PERF)
+-- =========================================================================
+
+print("--> [Review Regression 1] Deleted file without unloading loaded buffer becomes N/A...")
+do
+  local test_root = vim.fs.normalize(vim.fn.getcwd())
+  local dummy_buf_file = test_root .. "/tests/fixtures/dummy_loaded_buf.py"
+  local f = io.open(dummy_buf_file, "w")
+  f:write("print('loaded')\n")
+  f:close()
+
+  unwind.clear()
+  -- Open dummy_buf_file in Neovim so buffer remains loaded
+  vim.cmd.edit(vim.fn.fnameescape(dummy_buf_file))
+  local b = vim.fn.bufnr(dummy_buf_file)
+  assert_true(b ~= -1 and vim.api.nvim_buf_is_loaded(b), "buffer is loaded in Neovim")
+
+  -- Ingest trace pointing to dummy_buf_file
+  unwind.ingest('File "tests/fixtures/dummy_loaded_buf.py", line 1, in run\n')
+  assert_eq(unwind.state.active_session.files[1].available, true, "file available while on disk")
+
+  -- Delete file from filesystem WITHOUT deleting loaded buffer in Neovim
+  os.remove(dummy_buf_file)
+  assert_true(vim.api.nvim_buf_is_loaded(b), "buffer still loaded after file removal")
+
+  -- Re-check availability (via refresh_availability or jump_to_frame)
+  unwind.refresh_availability()
+  assert_eq(unwind.state.active_session.files[1].available, false, "file must be marked N/A despite loaded buffer")
+
+  -- Clean up buffer
+  pcall(vim.api.nvim_buf_delete, b, { force = true })
+  unwind.clear()
+end
+
+print("--> [Review Regression 2] Persistence save failure triggers rollback on save/rename/delete/frame-delete...")
+do
+  local test_sessions = require("unwind.sessions")
+  local test_root = vim.fs.normalize(vim.fn.getcwd())
+
+  -- 1. Rollback on save_working()
+  local s_work = test_sessions.new_working(test_root, { { file = "a.py", line = 1 } })
+  local session_list = {}
+  local orig_save = test_sessions.save
+  test_sessions.save = function() return false end
+
+  local ok_save = test_sessions.save_working(s_work, "Should Fail", session_list, test_root)
+  assert_true(not ok_save, "save_working should fail when disk write fails")
+  assert_eq(s_work.saved, false, "session.saved should roll back to false")
+  assert_eq(s_work.name, nil, "session.name should roll back to nil")
+  assert_eq(#session_list, 0, "session should not remain in session list")
+
+  -- 2. Rollback on rename()
+  test_sessions.save = orig_save
+  test_sessions.save_working(s_work, "Initial Name", session_list, test_root)
+  test_sessions.save = function() return false end
+
+  local ok_rename = test_sessions.rename(s_work, "New Name", session_list, test_root)
+  assert_true(not ok_rename, "rename should fail when disk write fails")
+  assert_eq(s_work.name, "Initial Name", "session.name must roll back to Initial Name")
+
+  -- 3. Rollback on delete()
+  local ok_del = test_sessions.delete(s_work, session_list, test_root)
+  assert_true(not ok_del, "delete should fail when disk write fails")
+  assert_eq(#session_list, 1, "session must remain in session list after failed delete")
+  assert_eq(s_work.saved, true, "session.saved must remain true after failed delete")
+
+  -- 4. Rollback on delete_frame_from_session()
+  unwind.clear()
+  unwind.state.active_session = s_work
+  rawset(unwind.state, "sessions", session_list)
+  assert_eq(#s_work.raw_frames, 1, "1 raw frame before delete")
+  unwind.delete_frame_from_session(s_work, 1)
+  assert_eq(#s_work.raw_frames, 1, "raw_frames must roll back after failed persistence")
+
+  -- Clean up
+  test_sessions.save = orig_save
+  test_sessions.delete(s_work, session_list, test_root)
+  unwind.clear()
+end
+
+print("--> [Review Regression 3] Active vs non-active frame deletion visual synchronization...")
+do
+  local test_sidebar = require("unwind.sidebar")
+  local test_root = vim.fs.normalize(vim.fn.getcwd())
+  local multiline_dummy = test_root .. "/tests/fixtures/multiline_dummy.txt"
+  local f = io.open(multiline_dummy, "w")
+  f:write("line 1\nline 2\nline 3\n")
+  f:close()
+
+  unwind.clear()
+  local trace = [[
+  File "tests/fixtures/multiline_dummy.txt", line 1, in f1
+  File "tests/fixtures/multiline_dummy.txt", line 2, in f2
+  File "tests/fixtures/multiline_dummy.txt", line 3, in f3
+]]
+  unwind.ingest(trace)
+  local s = unwind.state.active_session
+  unwind.toggle_sidebar()
+
+  -- Initially frame 1 is active
+  assert_eq(s.active_index, 1, "frame 1 initially active")
+  local cur_pos1 = vim.api.nvim_win_get_cursor(0)
+  assert_eq(cur_pos1[1], 1, "cursor is at line 1")
+
+  -- Delete non-active frame 3: active frame 1 should be preserved
+  unwind.delete_frame_from_session(s, 3)
+  assert_eq(#s.frames, 2, "2 frames remaining")
+  assert_eq(s.active_index, 1, "active_index preserved at frame 1")
+  local cur_pos_preserved = vim.api.nvim_win_get_cursor(0)
+  assert_eq(cur_pos_preserved[1], 1, "cursor remained at frame 1")
+
+  -- Move to frame 2 and delete active frame 2
+  unwind.jump_to_frame(2)
+  assert_eq(s.active_index, 2, "frame 2 active")
+  local cur_pos2 = vim.api.nvim_win_get_cursor(0)
+  assert_eq(cur_pos2[1], 2, "cursor is at line 2")
+
+  unwind.delete_frame_from_session(s, 2)
+  assert_eq(#s.frames, 1, "1 frame remaining")
+  assert_eq(s.active_index, 1, "nearest surviving frame 1 becomes active")
+  local cur_pos_after = vim.api.nvim_win_get_cursor(0)
+  assert_eq(cur_pos_after[1], 1, "source window cursor synchronized to surviving frame line 1")
+
+  test_sidebar.hide()
+  os.remove(multiline_dummy)
+  unwind.clear()
+end
+
+print("--> [Review Regression 4] Active missing-frame highlight gets UnwindSidebarMissing...")
+do
+  local test_sidebar = require("unwind.sidebar")
+  unwind.clear()
+  unwind.ingest('File "completely_missing.py", line 10, in f_missing\n')
+  unwind.toggle_sidebar()
+
+  -- Frame 1 is missing and active
+  local s = unwind.state.active_session
+  assert_eq(s.files[1].available, false, "file is missing")
+  assert_eq(s.active_index, 1, "frame 1 is active")
+
+  -- Inspect highlights on the active namespace in sidebar buffer
+  local side_buf = vim.fn.bufnr("unwind://sidebar")
+  assert_true(side_buf ~= -1, "sidebar buffer found")
+  local ns_active = vim.api.nvim_create_namespace("unwind_sidebar_active")
+  local marks = vim.api.nvim_buf_get_extmarks(side_buf, ns_active, 0, -1, { details = true })
+  local has_missing_hl = false
+  for _, m in ipairs(marks) do
+    if m[4] and m[4].hl_group == "UnwindSidebarMissing" then
+      has_missing_hl = true
+      break
+    end
+  end
+  assert_true(has_missing_hl, "active missing row must receive UnwindSidebarMissing highlight")
+
+  test_sidebar.hide()
+  unwind.clear()
+end
+
+print("--> [Review Regression 5] Reloaded session with active_index = 0 shows footer on activation...")
+do
+  local test_sessions = require("unwind.sessions")
+  local test_sidebar = require("unwind.sidebar")
+  local test_root = vim.fs.normalize(vim.fn.getcwd())
+  local storage_file = test_sessions.storage_path(test_root)
+
+  unwind.clear()
+  unwind.ingest('File "tests/fixtures/dummy.txt", line 1, in run\n')
+  local s = unwind.state.active_session
+  unwind.ensure_sessions_loaded(test_root)
+  test_sessions.save_working(s, "Footer Test", unwind.state.sessions, test_root)
+
+  -- Reload from disk: loaded sessions have active_index = 0
+  local reloaded = test_sessions.load(test_root)
+  assert_eq(reloaded[1].active_index, 0, "freshly reloaded session has active_index 0")
+
+  -- Activate session
+  unwind.activate_session(reloaded[1])
+  local side_buf = vim.fn.bufnr("unwind://sidebar")
+  assert_true(side_buf ~= -1, "sidebar buffer found")
+  local lines = vim.api.nvim_buf_get_lines(side_buf, 0, -1, false)
+  local last_line = lines[#lines]
+  assert_true(last_line:find("1/1 tests/fixtures/dummy.txt:1") ~= nil, "footer must be present after activating reloaded session, got: " .. tostring(last_line))
+
+  test_sidebar.hide()
+  test_sessions.delete(reloaded[1], unwind.state.sessions, test_root)
+  pcall(os.remove, storage_file)
+  unwind.clear()
+end
+
+print("--> [Review Regression 6] <CR> and 'd' on sidebar blank/footer rows do not jump...")
+do
+  local test_sidebar = require("unwind.sidebar")
+  unwind.clear()
+  local trace = [[
+  File "tests/fixtures/dummy.txt", line 1, in f1
+  File "tests/fixtures/dummy.txt", line 2, in f2
+]]
+  unwind.ingest(trace)
+  local s = unwind.state.active_session
+  unwind.toggle_sidebar()
+
+  local side_win = nil
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    if test_sidebar.is_sidebar_window(w) then
+      side_win = w
+      break
+    end
+  end
+  assert_true(side_win ~= nil, "sidebar window found")
+
+  -- Position sidebar cursor on the footer row (last row)
+  local side_buf = vim.api.nvim_win_get_buf(side_win)
+  local line_count = vim.api.nvim_buf_line_count(side_buf)
+  vim.api.nvim_win_set_cursor(side_win, { line_count, 0 })
+
+  -- Make frame 1 active
+  s.active_index = 1
+
+  -- Press <CR> on footer row
+  vim.api.nvim_win_call(side_win, function()
+    vim.cmd([[execute "normal \<CR>"]])
+  end)
+
+  -- active_index must remain 1, NOT jump to frame 2 (last frame)
+  assert_eq(s.active_index, 1, "<CR> on footer row must not change active_index")
+
+  -- Press 'd' on footer row
+  local frames_count_before = #s.frames
+  vim.api.nvim_win_call(side_win, function()
+    vim.cmd([[execute "normal d"]])
+  end)
+  assert_eq(#s.frames, frames_count_before, "'d' on footer row must not delete any frame")
+
+  test_sidebar.hide()
+  unwind.clear()
+end
+
+print("--> [Review Regression 7] Recreating missing file and refreshing ('r') updates availability...")
+do
+  local test_sidebar = require("unwind.sidebar")
+  local test_root = vim.fs.normalize(vim.fn.getcwd())
+  local dynamic_file = test_root .. "/tests/fixtures/reappear.py"
+  pcall(os.remove, dynamic_file)
+
+  unwind.clear()
+  unwind.ingest('File "tests/fixtures/reappear.py", line 1, in f_reappear\n')
+  local s = unwind.state.active_session
+  assert_eq(s.files[1].available, false, "file starts unavailable")
+
+  -- Create file on disk
+  local f = io.open(dynamic_file, "w")
+  f:write("print('now I exist')\n")
+  f:close()
+
+  -- Call refresh_availability
+  unwind.refresh_availability()
+  assert_eq(s.files[1].available, true, "file becomes available after refresh")
+
+  -- Clean up
+  os.remove(dynamic_file)
   unwind.clear()
 end
