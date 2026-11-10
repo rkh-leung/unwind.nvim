@@ -33,7 +33,11 @@ end, { nargs = "?", complete = "file", desc = "Ingest stacktrace from file or op
 
 vim.api.nvim_create_user_command("UnwindMenu", function()
   require("unwind").menu()
-end, { desc = "Toggle Harpoon-style floating menu" })
+end, { desc = "Toggle persistent session manager" })
+
+vim.api.nvim_create_user_command("UnwindSidebar", function()
+  require("unwind").toggle_sidebar()
+end, { desc = "Toggle persistent call-trace sidebar" })
 
 vim.api.nvim_create_user_command("UnwindNext", function()
   require("unwind").next()
@@ -63,6 +67,4 @@ vim.api.nvim_create_user_command("UnwindClear", function()
   require("unwind").clear()
 end, { desc = "Clear active decorations and state" })
 
--- Default keybindings using centralized installer with ownership tracking
--- Only maps if not already mapped, and records ownership in unwind
-require("unwind").install_keymaps(require("unwind").config.keymaps, true)
+-- Keymaps are managed by require("unwind").setup()
