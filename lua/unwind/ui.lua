@@ -224,17 +224,20 @@ end
 
 --- Opens the Session Manager floating menu
 --- Displays:
----   > + Save current trace... (if working session is unsaved)
----   Saved session rows: <name> <X frames>
+---   + New debugging session
+---   + Import stacktrace from clipboard
+---   Current: <name or 'Untitled'>   <X> frames
+---   Save current session... (if unsaved)
+---   ─ Saved Sessions ─
+---   <Saved items>
 --- Keymaps:
----   <CR>   open session or save current trace
+---   <CR>   open/trigger action
 ---   r      rename selected saved session
 ---   d      delete selected saved session
 ---   q/Esc  close menu
 ---@param items table[] List of manager row descriptors:
----               { type = "save_action" }
----               or { type = "session", session = s, name = s.name, frame_count = n }
----@param callbacks { on_save: fun(), on_select: fun(session: table), on_rename: fun(session: table), on_delete: fun(session: table) }
+---               { type = "new_session" | "import_clipboard" | "current_status" | "save_action" | "separator" | "session", ... }
+---@param callbacks { on_new?: fun(), on_import_clipboard?: fun(), on_save?: fun(), on_select?: fun(session: table), on_rename?: fun(session: table), on_delete?: fun(session: table) }
 function M.open_session_manager(items, callbacks)
   if active_win and vim.api.nvim_win_is_valid(active_win) then
     M.close()
@@ -242,7 +245,7 @@ function M.open_session_manager(items, callbacks)
   end
 
   if not items or #items == 0 then
-    vim.notify("Unwind: No sessions available.", vim.log.levels.INFO)
+    vim.notify("Unwind: No menu items available.", vim.log.levels.INFO)
     return
   end
 
@@ -266,14 +269,27 @@ function M.open_session_manager(items, callbacks)
 
   local max_text_len = 0
   for _, it in ipairs(items) do
-    local text = it.type == "save_action" and "+ Save current trace..." or (it.name or "")
+    local text = ""
+    if it.type == "new_session" then
+      text = "+ New debugging session"
+    elseif it.type == "import_clipboard" then
+      text = "+ Import stacktrace from clipboard"
+    elseif it.type == "save_action" then
+      text = "Save current session..."
+    elseif it.type == "current_status" then
+      text = string.format("Current: %s  %d frames", it.name or "Untitled", it.frame_count or 0)
+    elseif it.type == "separator" then
+      text = it.text or "Saved Sessions"
+    elseif it.type == "session" then
+      text = (it.name or "") .. "  " .. tostring(it.frame_count or 0) .. " frames"
+    end
     local w = strwidth(text)
     if w > max_text_len then
       max_text_len = w
     end
   end
 
-  local target_width = math.max(48, max_text_len + 20)
+  local target_width = math.max(48, max_text_len + 16)
   local max_w = math.max(1, editor_width - 4)
   local max_h = math.max(1, editor_height - 4)
   local win_width = math.max(1, math.min(target_width, max_w))
@@ -283,8 +299,26 @@ function M.open_session_manager(items, callbacks)
 
   local lines = {}
   for _, it in ipairs(items) do
-    if it.type == "save_action" then
-      table.insert(lines, "  + Save current trace...")
+    if it.type == "new_session" then
+      table.insert(lines, "  + New debugging session")
+    elseif it.type == "import_clipboard" then
+      table.insert(lines, "  + Import stacktrace from clipboard")
+    elseif it.type == "blank" then
+      table.insert(lines, "")
+    elseif it.type == "current_status" then
+      local name = it.name or "Untitled"
+      local count = it.frame_count or 0
+      local suffix = string.format("%d frame%s", count, count == 1 and "" or "s")
+      local label = "Current: " .. name
+      local pad = math.max(2, (win_width - 2) - strwidth(label) - strwidth(suffix) - 2)
+      table.insert(lines, "  " .. label .. string.rep(" ", pad) .. suffix)
+    elseif it.type == "save_action" then
+      table.insert(lines, "  Save current session...")
+    elseif it.type == "separator" then
+      local title_str = it.text or "Saved Sessions"
+      local sep_line = "  ─ " .. title_str .. " "
+      local fill = math.max(0, (win_width - 2) - strwidth(sep_line) - 1)
+      table.insert(lines, sep_line .. string.rep("─", fill))
     else
       local name = it.name or "Untitled"
       local count = it.frame_count or 0
@@ -318,9 +352,13 @@ function M.open_session_manager(items, callbacks)
 
   for idx, it in ipairs(items) do
     local line_idx = idx - 1
-    if it.type == "save_action" then
+    if it.type == "new_session" or it.type == "import_clipboard" or it.type == "save_action" then
       vim.api.nvim_buf_add_highlight(buf, ns_ui, "Title", line_idx, 0, -1)
-    else
+    elseif it.type == "separator" then
+      vim.api.nvim_buf_add_highlight(buf, ns_ui, "Comment", line_idx, 0, -1)
+    elseif it.type == "current_status" then
+      vim.api.nvim_buf_add_highlight(buf, ns_ui, "Special", line_idx, 0, -1)
+    elseif it.type == "session" then
       vim.api.nvim_buf_add_highlight(buf, ns_ui, "Normal", line_idx, 0, -1)
       local line_content = lines[idx]
       local s, e = line_content:find("%d+%s+frames?")
@@ -341,7 +379,7 @@ function M.open_session_manager(items, callbacks)
     col = col,
     style = "minimal",
     border = "rounded",
-    title = " Unwind Sessions ",
+    title = " Unwind ",
     title_pos = "center",
   }
 
@@ -374,16 +412,18 @@ function M.open_session_manager(items, callbacks)
   vim.keymap.set("n", "<CR>", function()
     local it = get_current_item()
     if not it then return end
-    if it.type == "save_action" then
+    if it.type == "new_session" then
       M.close()
-      if callbacks.on_save then
-        callbacks.on_save()
-      end
+      if callbacks.on_new then callbacks.on_new() end
+    elseif it.type == "import_clipboard" then
+      M.close()
+      if callbacks.on_import_clipboard then callbacks.on_import_clipboard() end
+    elseif it.type == "save_action" then
+      M.close()
+      if callbacks.on_save then callbacks.on_save() end
     elseif it.type == "session" then
       M.close()
-      if callbacks.on_select then
-        callbacks.on_select(it.session)
-      end
+      if callbacks.on_select then callbacks.on_select(it.session) end
     end
   end, keymap_opts)
 
@@ -408,22 +448,6 @@ function M.open_session_manager(items, callbacks)
       end
     end
   end, keymap_opts)
-
-  -- 1 through 9 quick jump
-  for i = 1, 9 do
-    vim.keymap.set("n", tostring(i), function()
-      local it = items[i]
-      if it then
-        if it.type == "save_action" then
-          M.close()
-          if callbacks.on_save then callbacks.on_save() end
-        elseif it.type == "session" then
-          M.close()
-          if callbacks.on_select then callbacks.on_select(it.session) end
-        end
-      end
-    end, keymap_opts)
-  end
 
   vim.keymap.set("n", "q", function() M.close() end, keymap_opts)
   vim.keymap.set("n", "<Esc>", function() M.close() end, keymap_opts)

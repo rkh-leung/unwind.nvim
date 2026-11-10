@@ -35,6 +35,10 @@ vim.api.nvim_create_user_command("UnwindMenu", function()
   require("unwind").menu()
 end, { desc = "Toggle persistent session manager" })
 
+vim.api.nvim_create_user_command("UnwindAdd", function()
+  require("unwind").add_current_location()
+end, { desc = "Add current source location to active debugging session" })
+
 vim.api.nvim_create_user_command("UnwindSidebar", function()
   require("unwind").toggle_sidebar()
 end, { desc = "Toggle persistent call-trace sidebar" })

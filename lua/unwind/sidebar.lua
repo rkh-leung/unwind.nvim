@@ -107,7 +107,7 @@ function M.render(session)
   local strwidth = vim.api.nvim_strwidth or function(s) return #s end
 
   -- Header line
-  local title = session.name or "[unsaved]"
+  local title = session.name or "Untitled"
   if session.filter_enabled then
     title = title .. " [filtered]"
   end
@@ -116,7 +116,9 @@ function M.render(session)
 
   local frames = session.frames or {}
   if #frames == 0 then
-    table.insert(lines, "  (no frames in session)")
+    table.insert(lines, "  No locations yet")
+    table.insert(lines, "")
+    table.insert(lines, "  Add a source location (:UnwindAdd)")
   else
     for idx, f in ipairs(frames) do
       local file_entry = (f.file_index and session.files) and session.files[f.file_index] or nil
@@ -128,19 +130,32 @@ function M.render(session)
       -- Compact row formatting:
       --   idx  method/NA   file:line
       local num_str = string.format("%2d", idx)
-      local status_str = is_avail and (f.method ~= "" and f.method or "frame") or "N/A"
-      local loc_str = string.format("%s:%d", vim.fs.basename(f.file or ""), f.line or 1)
+      local loc_str = string.format("%s:%d", vim.fs.basename(f.file or f.path or ""), f.line or 1)
+      local status_str
+      if not is_avail then
+        status_str = "N/A"
+      elseif f.method and f.method ~= "" then
+        status_str = f.method
+      else
+        status_str = loc_str
+        loc_str = ""
+      end
 
       -- Compute fit
-      local row_content = string.format("  %s %s  %s", num_str, status_str, loc_str)
-      if strwidth(row_content) > win_width and win_width > 12 then
-        local max_status_w = math.max(4, win_width - strwidth(num_str) - strwidth(loc_str) - 8)
-        local trunc_status = status_str
-        while strwidth(trunc_status) > max_status_w and #trunc_status > 0 do
-          trunc_status = trunc_status:sub(1, -2)
-        end
-        status_str = trunc_status
+      local row_content
+      if loc_str ~= "" then
         row_content = string.format("  %s %s  %s", num_str, status_str, loc_str)
+        if strwidth(row_content) > win_width and win_width > 12 then
+          local max_status_w = math.max(4, win_width - strwidth(num_str) - strwidth(loc_str) - 8)
+          local trunc_status = status_str
+          while strwidth(trunc_status) > max_status_w and #trunc_status > 0 do
+            trunc_status = trunc_status:sub(1, -2)
+          end
+          status_str = trunc_status
+          row_content = string.format("  %s %s  %s", num_str, status_str, loc_str)
+        end
+      else
+        row_content = string.format("  %s %s", num_str, status_str)
       end
 
       table.insert(lines, row_content)
@@ -151,11 +166,16 @@ function M.render(session)
   table.insert(lines, "")
   if session.active_index and session.active_index > 0 and session.frames and session.frames[session.active_index] then
     local act_frame = session.frames[session.active_index]
-    local footer_text = string.format(" %d/%d %s:%d", session.active_index, #session.frames, act_frame.file, act_frame.line or 1)
+    local footer_text = string.format(" %d/%d %s:%d", session.active_index, #session.frames, act_frame.file or act_frame.path or "", act_frame.line or 1)
     table.insert(lines, footer_text)
   else
     table.insert(lines, "")
   end
+
+  table.insert(lines, "")
+  table.insert(lines, " enter open   d delete")
+  table.insert(lines, " J/K move     e replace")
+  table.insert(lines, " s save       q close")
 
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
@@ -230,18 +250,22 @@ function M.set_active(session, index)
   -- Update footer if present
   local line_count = vim.api.nvim_buf_line_count(buf)
   if line_count >= #frames + 4 then
-    local footer_line = line_count - 1
-    local act_frame = frames[index]
-    local footer_text = string.format(" %d/%d %s:%d", index, #frames, act_frame.file, act_frame.line or 1)
-    vim.bo[buf].modifiable = true
-    pcall(vim.api.nvim_buf_set_lines, buf, footer_line, footer_line + 1, false, { footer_text })
-    vim.bo[buf].modifiable = false
+    -- Line index for footer_text: lines before help block
+    -- lines: header(1), blank(2), frames(#frames), blank(#frames+3), footer_text(#frames+4), blank(#frames+5), help(3 lines)
+    local footer_line = #frames + 3 -- 0-based index
+    if footer_line < line_count then
+      local act_frame = frames[index]
+      local footer_text = string.format(" %d/%d %s:%d", index, #frames, act_frame.file or act_frame.path or "", act_frame.line or 1)
+      vim.bo[buf].modifiable = true
+      pcall(vim.api.nvim_buf_set_lines, buf, footer_line, footer_line + 1, false, { footer_text })
+      vim.bo[buf].modifiable = false
+    end
   end
 end
 
 --- Open or reuse the right sidebar split
 ---@param session table
----@param opts? { on_select_frame?: fun(idx: number), on_delete_frame?: fun(idx: number), on_refresh?: fun() }
+---@param opts? { on_select_frame?: fun(idx: number), on_delete_frame?: fun(idx: number), on_move_frame?: fun(from: number, to: number), on_replace_frame?: fun(idx: number), on_save?: fun(), on_refresh?: fun() }
 function M.open(session, opts)
   opts = opts or {}
   setup_highlights()
@@ -307,6 +331,42 @@ function M.open(session, opts)
     local frame_idx = line_idx - 2
     if opts.on_delete_frame and frame_idx >= 1 and frame_idx <= #(session.frames or {}) then
       opts.on_delete_frame(frame_idx)
+    end
+  end, key_opts)
+
+  -- J: Move selected frame down
+  vim.keymap.set("n", "J", function()
+    local cursor = vim.api.nvim_win_get_cursor(0)
+    local frame_idx = cursor[1] - 2
+    local total = #(session.frames or {})
+    if opts.on_move_frame and frame_idx >= 1 and frame_idx < total then
+      opts.on_move_frame(frame_idx, frame_idx + 1)
+    end
+  end, key_opts)
+
+  -- K: Move selected frame up
+  vim.keymap.set("n", "K", function()
+    local cursor = vim.api.nvim_win_get_cursor(0)
+    local frame_idx = cursor[1] - 2
+    local total = #(session.frames or {})
+    if opts.on_move_frame and frame_idx > 1 and frame_idx <= total then
+      opts.on_move_frame(frame_idx, frame_idx - 1)
+    end
+  end, key_opts)
+
+  -- e: Replace selected frame with current source location
+  vim.keymap.set("n", "e", function()
+    local cursor = vim.api.nvim_win_get_cursor(0)
+    local frame_idx = cursor[1] - 2
+    if opts.on_replace_frame and frame_idx >= 1 and frame_idx <= #(session.frames or {}) then
+      opts.on_replace_frame(frame_idx)
+    end
+  end, key_opts)
+
+  -- s: Save current session
+  vim.keymap.set("n", "s", function()
+    if opts.on_save then
+      opts.on_save()
     end
   end, key_opts)
 

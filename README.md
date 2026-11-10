@@ -1,10 +1,86 @@
 # unwind.nvim
 
-A lightweight, high-performance stacktrace navigation and persistent debugging session plugin written entirely in native Lua (targeting Neovim >= 0.10).
+A lightweight, high-performance persistent debugging path and session manager written entirely in native Lua (targeting Neovim >= 0.10).
 
-`unwind.nvim` turns plain-text crash stacktraces directly into navigable Neovim source locations and persistent debugging sessions. It handles Raygun traces, compiler errors, Rust panics, Node.js/V8 traces, Python tracebacks, Ruby backtraces, and generic call frames. Traces are parsed entirely in-memory using pure Lua pattern matching, managed via a persistent session manager (`<leader>w`), inspected with a Yazi-style persistent right-hand call-trace sidebar, and projected as inline call-stack telemetry into source buffers using Neovim's extended marks (`virt_lines`) API.
+A debugging session in `unwind.nvim` is a **mutable ordered list of source locations**. A stacktrace is only one way to create or bootstrap that list. You can start with a stacktrace, construct a debugging path manually from cursor locations while exploring code, or combine both into hybrid investigation paths.
 
-There are zero external binary dependencies (no external CLI tools, no external JSON parsers, no database, no RPC processes). All parsing, session persistence, and buffer navigation run entirely in-process within Neovim.
+Debugging sessions are managed through a centralized session manager (`<leader>w`), edited and navigated via a Yazi-style persistent right vertical split sidebar, and projected as inline call-path telemetry into source buffers using Neovim's extended marks (`virt_lines`) API.
+
+There are zero external binary dependencies (no external CLI tools, no external JSON parsers, no database, no RPC processes). All parsing, session persistence, Tree-sitter function resolution, and buffer navigation run entirely in-process within Neovim.
+
+---
+
+## Target Workflows
+
+`unwind.nvim` supports two equally valid workflows:
+
+### 1. Stacktrace-first (`<leader>c`)
+```text
+clipboard contains stacktrace
+        │
+        ▼
+     <leader>c
+        │
+        ▼
+create new unnamed transient session
+        │
+        ▼
+parse clipboard → frames
+        │
+        ▼
+activate session
+        ├── jump to first useful frame
+        └── open/update sidebar
+```
+Pressing `<leader>c` (or running `:UnwindClipboard`) always creates a **new unnamed transient session**, never mutating whichever session happened to be active.
+
+### 2. Scratch-first (`<leader>w` or `:UnwindAdd`)
+```text
+     <leader>w
+         │
+         ▼
+    Unwind menu
+         │
+         ├── New debugging session
+         ├── Import clipboard
+         ├── Save current session...
+         └── Existing sessions...
+                  │
+                  ▼
+          empty unnamed session
+                  │
+                  ▼
+            sidebar opens
+                  │
+                  ▼
+         navigate source code
+                  │
+                  ▼
+    :UnwindAdd current location
+```
+You can start a session from scratch without having a stacktrace at all. Run `:UnwindAdd` in any file to add the current source location to your active session. If no session exists, `:UnwindAdd` automatically creates an unnamed session and opens the sidebar.
+
+---
+
+## Features
+
+- **Debugging Session as Primary Abstraction**: Sessions are mutable ordered lists of source locations (`UnwindSession`). A session can start empty, grow manually, or be bootstrapped from stacktraces.
+- **Tree-sitter Smart Location Resolution**: When adding frames with `:UnwindAdd`, Tree-sitter resolves the enclosing function/method definition and its declaration line across languages (Lua, Python, JavaScript, TypeScript, Rust, Go, Ruby, C, C++), with graceful fallback to cursor position.
+- **Editable Call-Path Sidebar**: The persistent right vertical split sidebar acts as an interactive call-path editor:
+  - `<CR>`: Jump to frame in source buffer.
+  - `J` / `K`: Move selected frame down/up in the call order.
+  - `e`: Replace selected frame with current source location (ideal when code moved).
+  - `d`: Delete frame from session (persists immediately if saved).
+  - `s`: Save session (prompts for name).
+  - `r`: Refresh file availability.
+  - `q`: Hide sidebar.
+- **Pure Lua In-Memory Parsing**: Ingests and parses crash stacktraces in-process via native Lua pattern matching (Raygun/.NET, Java, Rust, Node.js/V8, Python, Ruby, compiler errors, generic logs).
+- **Named Persistent Debugging Sessions**: Transient sessions (`name = nil`) stay in-memory; named sessions persist immediately across Neovim restarts in `stdpath("state")/unwind/` scoped to your repository root.
+- **First-Class Missing File Handling**: Missing or deleted files remain selectable as red `N/A` positions without creating dummy buffers or crashing.
+- **Inline Virtual Line Telemetry**: Extended mark (`virt_lines`) decorations above fault lines with frame depth (`#depth/total`), method name, file, and line information.
+- **Vendor / Gem / Library Filtering**: Automatically tags non-workspace third-party library frames, allowing toggleable filtering on demand (`:UnwindToggleFilter`).
+- **File vs. Frame Cycling**: Instant file-by-file navigation (`]f` / `[f`) alongside detailed frame-by-frame stepping (`]u` / `[u`).
+- **Quickfix Export**: Export all active debugging frames directly to Neovim's quickfix list with `:UnwindQuickfix`.
 
 ---
 
@@ -21,85 +97,62 @@ There are zero external binary dependencies (no external CLI tools, no external 
 ```
 
 2. Open Neovim in your project root (`cd /path/to/project && nvim .`).
-3. Copy a crash stacktrace to your system clipboard.
-4. Press `<leader>c` (or run `:UnwindClipboard`).
-5. `unwind.nvim` automatically jumps to the primary fault location with an inline error overlay. Cycle frames with `]u` / `[u`, cycle distinct files with `]f` / `[f`, or press `<leader>w` to open the session manager.
-
----
-
-## Features
-
-- **Pure Lua In-Memory Parsing**: Zero external CLI processes or regex libraries. Ingests and parses 100+ line stacktraces in-process via native LuaJIT.
-- **Named Persistent Debugging Sessions**: Ingested traces start as transient working sessions that can be named and saved (e.g. "Memory leak", "Login race condition"). Saved sessions persist across Neovim restarts scoped to your project root in `stdpath("state")/unwind/`.
-- **Yazi-Style Persistent Call-Trace Sidebar**: A lightweight right vertical split displaying every active call frame in trace order, synchronizing dynamically with `]u` / `[u` and `]f` / `[f`.
-- **First-Class Missing File Handling**: Missing or stale source files are treated as valid stacktrace positions marked with a red `N/A`. Selecting a missing frame never crashes, never creates an empty buffer, and clears stale inline decorations. If the file reappears, pressing `r` in the sidebar restores navigability.
-- **Non-Destructive Clearing**: `:UnwindClear` deactivates active presentations and discards unsaved traces without deleting your saved debugging sessions.
-- **Multi-Language Support**:
-  - Raygun / .NET / Java (`at Namespace.Class.Method(...) in /path/to/file.cs:line 123` or `at Class.Method(File.java:123)`)
-  - Rust / Cargo / Compiler (`--> src/main.rs:45:12` or `at /path/to/main.rs:45`)
-  - Node.js / V8 (`at Method (/path/to/file.js:45:12)` or `at /path/to/file.js:45:12`)
-  - Python (`File "/path/to/file.py", line 45, in method_name`)
-  - Ruby (`from /path/to/file.rb:12:in 'method_name'` or `/path/to/file.rb:12:in \`method_name\``)
-  - Generic fallback (`([%w_%-./\\]+%.%w+):(%d+):?(%d*)`)
-- **Intelligent Path Normalization**: Automatically translates remote/container prefixes (e.g. `/app/`, `/var/task/`, `C:\workspace\`) to local files relative to `vim.fn.getcwd()`, and supports explicit `path_mappings`.
-- **Inline Virtual Line Telemetry**: Extended mark (`virt_lines`) decorations above fault lines with frame depth (`#depth/total`), method name (omitting noisy `anonymous()` placeholders), file, and line information.
-- **Vendor / Gem / Library Filtering**: Automatically tags non-workspace third-party library frames (e.g. `shared/bundle/ruby/...`, `/gems/`, `vendor/bundle/`, `node_modules/`, `/usr/lib/`), allowing toggleable filtering on demand.
-- **File vs. Frame Cycling**: Instant file-by-file navigation (`]f` / `[f`) alongside detailed frame-by-frame stepping (`]u` / `[u`).
-- **Quickfix Export**: Export all active stacktrace frames directly to Neovim's quickfix list with `:UnwindQuickfix`.
+3. Either:
+   - Copy a stacktrace and press `<leader>c` to start debugging it immediately.
+   - Or press `<leader>w` and choose `+ New debugging session`, then navigate code and run `:UnwindAdd`.
 
 ---
 
 ## Session Manager & Right Sidebar Workflow
 
-`unwind.nvim` models stacktraces as persistent debugging sessions scoped to each repository.
-
-### 1. Ingest a trace
-Ingest any trace using `<leader>c` (clipboard), `:UnwindInput` (interactive scratchpad), or `:Unwind <file>`. The trace immediately becomes an active transient working session.
-
-### 2. Save the session
-Open the session manager with `<leader>w` (or `:UnwindMenu`):
+### Unwind Menu (`<leader>w` / `:UnwindMenu`)
 ```text
-+----------------------------------+
-| Unwind Sessions                  |
-|                                  |
-| > + Save current trace...        |
-|   Memory leak          14 frames |
-|   Login race condition  8 frames |
-|                                  |
-| Enter open   r rename   d delete |
-+----------------------------------+
+┌──────────────────────────────────────────────┐
+│ Unwind                                       │
+│                                              │
+│   + New debugging session                    │
+│   + Import stacktrace from clipboard         │
+│                                              │
+│   Current: Untitled                 3 frames │
+│   Save current session...                    │
+│                                              │
+│ ─ Saved Sessions ─────────────────────────── │
+│   Memory leak                      14 frames │
+│   Login race condition              8 frames │
+│                                              │
+│ Enter open   r rename   d delete             │
+└──────────────────────────────────────────────┘
 ```
-Select `+ Save current trace...` and enter a session name (e.g. `Worker deadlock`). Once saved, the session remains stored on disk until you explicitly delete it.
 
-### 3. Persistent right sidebar
-Selecting a session activates it and opens the call-trace sidebar on the right:
+### Call-Trace Sidebar
 ```text
-+----------------------------------------------+---------------------------+
-|                                              | Worker deadlock           |
-| source buffer                                |                           |
-|                                              |   1 allocate_buffer       |
-| function retain_object() {                   |   2 process_request       |
-|     ...                                      | > 3 retain_object         |
-| }                                            |   4 N/A                   |
-|                                              |   5 main                  |
-|                                              |                           |
-|                                              | 3/5 src/cache.lua:117     |
-+----------------------------------------------+---------------------------+
+┌────────────────────────────┐
+│ Untitled                   │
+│                            │
+│   1 authenticate           │
+│ > 2 load_user              │
+│   3 update_account         │
+│   4 save                   │
+│                            │
+│ 2/4 src/user.lua:81        │
+│                            │
+│ enter open   d delete      │
+│ J/K move     e replace     │
+│ s save       q close       │
+└────────────────────────────┘
 ```
-Sidebar keymaps:
-- `<CR>`: Jump to and open the frame under cursor in the source window.
-- `d`: Delete the selected frame from the session (persists immediately if session is saved).
-- `r`: Refresh file availability statuses.
-- `q`: Hide the sidebar.
-- `j` / `k`: Standard navigation.
 
-Navigation while focused inside the sidebar split targets the source window, never replacing the sidebar split buffer.
-
-### 4. Handling missing or stale files
-If a source file was deleted or only exists on another git branch:
-- The sidebar displays `N/A` with error highlighting.
-- Moving onto the frame (`]u` / `[u`) moves the sidebar highlight to that frame, clears previous inline source decorations, and never creates an empty buffer.
-- When the file reappears on disk, press `r` in the sidebar to re-check availability and resume source navigation.
+When no locations have been added yet, the sidebar displays an empty state:
+```text
+┌────────────────────────────┐
+│ Untitled                   │
+│                            │
+│   No locations yet         │
+│                            │
+│   Add a source location    │
+│   (:UnwindAdd)             │
+└────────────────────────────┘
+```
 
 ---
 
@@ -134,7 +187,8 @@ All leader keymaps follow single-key mappings:
 | Action | Command | Default Keymap | Description |
 |---|---|---|---|
 | Session Manager | `:UnwindMenu` | `<leader>w` | Open persistent session manager |
-| Ingest Clipboard | `:UnwindClipboard` | `<leader>c` | Ingest stacktrace from system clipboard (`+`) |
+| Ingest Clipboard | `:UnwindClipboard` | `<leader>c` | Ingest stacktrace from system clipboard into new session |
+| Add Location | `:UnwindAdd` | - | Add current source location to active debugging session |
 | Next Frame | `:UnwindNext` | `]u` | Jump to next stack frame |
 | Previous Frame | `:UnwindPrev` | `[u` | Jump to previous stack frame |
 | Next File | `:UnwindNextFile` | `]f` | Jump directly to next unique file |
@@ -150,10 +204,11 @@ All leader keymaps follow single-key mappings:
 
 | Command | Description |
 |---|---|
+| `:UnwindAdd` | Adds the current cursor/function location to the active debugging session (creates session if none exists) |
+| `:UnwindClipboard` | Ingests stacktrace from clipboard `+` register into a new transient session |
 | `:Unwind [path]` | Ingests stacktrace from file `[path]` or opens interactive paste modal |
 | `:UnwindFile <path>` | Ingests stacktrace from specified file |
 | `:UnwindInput` | Opens interactive floating scratchpad to paste/type a stacktrace |
-| `:UnwindClipboard` | Ingests stacktrace from clipboard `+` register |
 | `:UnwindSelection` | Ingests stacktrace from visually highlighted range |
 | `:UnwindMenu` | Opens the persistent debugging session manager |
 | `:UnwindSidebar` | Toggles the persistent call-trace right sidebar |

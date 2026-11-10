@@ -2,34 +2,40 @@
 
 ## Executive Summary
 
-`unwind.nvim` is a lightweight, standalone Neovim plugin designed for Neovim >= 0.10. It transforms plain-text crash stacktraces and compiler error logs into navigable Neovim source locations and persistent debugging sessions. Traces are parsed entirely in-memory using pure Lua pattern matching, managed via a persistent session manager (`<leader>w`), inspected with a Yazi-style persistent right vertical split sidebar (`sidebar.lua`), and projected as inline virtual line (`virt_lines`) telemetry at fault locations.
+`unwind.nvim` is a lightweight, standalone Neovim plugin designed for Neovim >= 0.10. It establishes the **debugging session as a mutable ordered list of source locations** as its primary abstraction. A stacktrace is only one mechanism to initialize or populate that list; developers can also build debugging paths interactively from cursor locations using Tree-sitter resolution (`:UnwindAdd`), reorder steps (`J` / `K`), replace outdated frames (`e`), and save named sessions across Neovim restarts.
 
-The plugin requires zero external binary dependencies (no external Rust, Go, or Python binaries, and no RPC servers). All parsing, session persistence, and telemetry injection run in-process via LuaJIT with minimal overhead.
+Debugging sessions are managed via a persistent session manager (`<leader>w`), inspected with an editable Yazi-style persistent right vertical split sidebar (`sidebar.lua`), and projected as inline virtual line (`virt_lines`) telemetry at fault locations.
+
+The plugin requires zero external binary dependencies (no external Rust, Go, or Python binaries, and no RPC servers). All parsing, session persistence, Tree-sitter AST resolution, and telemetry injection run in-process via LuaJIT with minimal overhead.
 
 ---
 
 ## 1. High-Level Architecture & Persistence Model
 
-The plugin follows a layered lifecycle architecture:
+The plugin follows a centralized session-centric architecture:
 
 ```text
-persistent stable trace (stdpath("state")/unwind/<sha256(root)>.json)
-        ↓
-runtime-derived frames/files/availability
-        ↓
-active session
-     ↙       ↘
- source     sidebar
+  clipboard / stacktrace ──► parser ──┐
+                                      ▼
+             menu (<leader>w) ──► session manager ◄── :UnwindAdd / Tree-sitter
+                                      │
+                               session changed
+                                      │
+                         ┌────────────┼────────────┐
+                         ▼            ▼            ▼
+                      sidebar     navigator    decorator
 ```
 
 ```text
 unwind.nvim/
 ├── plugin/
-│   └── unwind.lua       # Auto-loaded entry point registering Vim commands and keymaps
+│   └── unwind.lua       # Auto-loaded entry point registering Vim commands (:UnwindAdd, etc.)
 ├── lua/unwind/
 │   ├── init.lua         # Plugin lifecycle, state orchestration, navigation controller, public API
-│   ├── sessions.lua     # Atomic persistence layer, session serialization, transactional state lifecycle
-│   ├── sidebar.lua      # Yazi-style persistent right-hand call-trace sidebar
+│   ├── sessions.lua     # Central session model, mutation API, and atomic persistence layer
+│   ├── events.lua       # Lightweight internal pub/sub event bus for session state changes
+│   ├── location.lua     # Tree-sitter function resolver and cursor location extraction
+│   ├── sidebar.lua      # Yazi-style persistent right-hand call-trace sidebar and path editor
 │   ├── parser.lua       # Multi-language stacktrace pattern matcher and path normalizer
 │   ├── collector.lua    # Frame aggregation, file deduplication, and vendor filtering logic
 │   ├── decorator.lua    # Neovim extmarks & virt_lines inline telemetry projection
@@ -37,7 +43,10 @@ unwind.nvim/
 └── tests/
     ├── fixtures/        # Sample stack traces (Raygun, Rust, Node.js, Ruby, dummy fixtures)
     ├── parser_spec.lua  # Headless test runner testing parsing, navigation, persistence, and invariants
-    └── leak_spec.lua    # Memory stability and lifecycle verification
+    ├── leak_spec.lua    # Memory stability and lifecycle verification
+    ├── session_spec.lua # Session lifecycle, mutation API, and persistence tests
+    ├── clipboard_spec.lua # Clipboard isolation and non-mutating start tests
+    └── location_spec.lua  # Tree-sitter and cursor location resolution tests
 ```
 
 ### End-to-End Execution Flow
