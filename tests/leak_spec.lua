@@ -106,3 +106,26 @@ assert(growth_kb < ALLOWABLE_GROWTH_KB,
     baseline_kb, final_kb, growth_kb, ALLOWABLE_GROWTH_KB))
 
 print(string.format("Heap growth test passed. Baseline: %.2f KB, Final: %.2f KB, Growth: %.2f KB", baseline_kb, final_kb, growth_kb))
+
+-- Test repeated sidebar open/hide and session switching
+print("--> Testing sidebar open/hide and session switching lifecycle...")
+local sidebar = require("unwind.sidebar")
+
+-- Warm up sidebar buffer once
+sidebar.open({ frames = {}, files = {} })
+sidebar.hide()
+
+local before_sidebar = snapshot()
+for _ = 1, 100 do
+  unwind.ingest(sample_trace)
+  sidebar.open(unwind.state.active_session)
+  sidebar.hide()
+  unwind.clear()
+end
+local after_sidebar = snapshot()
+assert(after_sidebar.buffers == before_sidebar.buffers,
+  string.format("Sidebar buffers retained after lifecycle: before %d, after %d", before_sidebar.buffers, after_sidebar.buffers))
+assert(after_sidebar.windows == before_sidebar.windows,
+  string.format("Sidebar windows retained after lifecycle: before %d, after %d", before_sidebar.windows, after_sidebar.windows))
+
+print("Sidebar open/hide lifecycle test passed.")

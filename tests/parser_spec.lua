@@ -473,10 +473,12 @@ do
     { file = "/remote/container/app/totally_missing_nonexistent_xyz.py", primary_line = 125, total_frames = 1 }
   }
   unwind.state.active_index = 0
-  unwind.jump_to_frame(1)
+  local selected, opened = unwind.jump_to_frame(1)
   local bufs_after = #vim.api.nvim_list_bufs()
   assert_eq(bufs_after, bufs_before, "nonexistent file should not add an empty buffer to buffer list")
-  assert_eq(unwind.state.active_index, 0, "active_index should NOT be updated if file open failed")
+  assert_true(selected, "missing frame should still be selected as valid stacktrace position")
+  assert_true(not opened, "source file could not be opened")
+  assert_eq(unwind.state.active_index, 1, "active_index commits to missing frame in persistent sessions")
 end
 
 print("--> [Finding F] Workspace prefix boundary check in collector...")
@@ -662,11 +664,11 @@ do
   assert_eq(unwind.state.active_file_index, 1, "active_file_index is 1")
 
   -- Now attempt to jump to file 2 (nonexistent)
+  -- In persistent sessions, missing file selects the primary frame in sidebar and updates indices
   local ok2 = unwind.jump_to_file(2)
-  assert_true(not ok2, "file 2 jump failed")
-  -- Both active_index and active_file_index MUST remain at 1
-  assert_eq(unwind.state.active_index, 1, "active_index preserved after failed jump")
-  assert_eq(unwind.state.active_file_index, 1, "active_file_index preserved after failed jump")
+  assert_true(ok2, "file 2 frame selected as N/A in persistent sessions")
+  assert_eq(unwind.state.active_index, 2, "active_index moved to file 2's frame")
+  assert_eq(unwind.state.active_file_index, 2, "active_file_index moved to file 2")
   unwind.clear()
 end
 
@@ -825,7 +827,7 @@ do
   unwind.clear()
 end
 
-print("--> [New Invariants] Non-trapping navigation skipping missing frames...")
+print("--> [New Invariants] Navigation across missing and valid frames...")
 do
   unwind.clear()
   -- Stacktrace with:
@@ -838,12 +840,16 @@ do
   File "missing_two.py", line 20, in f3
 ]]
   unwind.ingest(mixed_trace)
-  -- Ingestion attempts M.next() which skips frame 1 and successfully lands on frame 2!
-  assert_eq(unwind.state.active_index, 2, "navigation should automatically skip missing frame 1 and land on frame 2")
+  -- Ingestion starts at frame 1 (selecting missing frame 1 as N/A)
+  assert_eq(unwind.state.active_index, 1, "initial navigation lands on frame 1")
 
-  -- Calling next() again should wrap and land back on frame 2 (skipping frame 3 and frame 1)
+  -- Calling next() moves to frame 2 (valid)
   unwind.next()
-  assert_eq(unwind.state.active_index, 2, "next() skips missing frames and lands on the next valid frame")
+  assert_eq(unwind.state.active_index, 2, "next() moves to frame 2")
+
+  -- Calling next() moves to frame 3 (missing)
+  unwind.next()
+  assert_eq(unwind.state.active_index, 3, "next() moves to frame 3")
   unwind.clear()
 end
 
@@ -1017,3 +1023,278 @@ do
 end
 
 print("All parser, collector & integration unit tests PASSED successfully!")
+
+-- =========================================================================
+-- PERSISTENT SESSIONS & SIDEBAR SPEC SUITE
+-- =========================================================================
+
+print("--> [Session Spec 1] Persistence roundtrip and non-serialization of runtime fields...")
+do
+  local test_sessions = require("unwind.sessions")
+  local test_root = vim.fs.normalize(vim.fn.getcwd())
+  local storage_file = test_sessions.storage_path(test_root)
+
+  local raw = {
+    { file = "src/cache.lua", line = 117, col = 4, method = "retain_object", raw_line = "raw line 1" },
+    { file = "src/worker.lua", line = 42, col = 1, method = "worker_loop", raw_line = "raw line 2" },
+  }
+  local test_s = test_sessions.new_working(test_root, raw, false)
+  local list = {}
+  local ok, err = test_sessions.save_working(test_s, "Memory leak", list, test_root)
+  assert_true(ok, "session saved successfully: " .. tostring(err))
+
+  local f = io.open(storage_file, "r")
+  assert_true(f ~= nil, "state file opened")
+  local txt = f:read("*all")
+  f:close()
+  local json = vim.json.decode(txt)
+  assert_eq(#json.sessions, 1, "1 session serialized")
+  assert_eq(json.sessions[1].name, "Memory leak", "session name serialized")
+  -- Runtime fields must NOT be serialized
+  assert_true(json.sessions[1].frames[1].resolved_path == nil, "resolved_path not serialized")
+  assert_true(json.sessions[1].frames[1].navigable == nil, "navigable not serialized")
+  assert_true(json.sessions[1].active_index == nil, "active_index not serialized")
+
+  -- Reload
+  local reloaded = test_sessions.load(test_root)
+  assert_eq(#reloaded, 1, "1 session reloaded")
+  assert_eq(reloaded[1].name, "Memory leak", "reloaded name matches")
+  assert_eq(#reloaded[1].raw_frames, 2, "reloaded raw frames count matches")
+
+  test_sessions.delete(reloaded[1], list, test_root)
+  pcall(os.remove, storage_file)
+end
+
+print("--> [Session Spec 2] Ingestion does not overwrite saved session...")
+do
+  local test_sessions = require("unwind.sessions")
+  local test_root = vim.fs.normalize(vim.fn.getcwd())
+  local storage_file = test_sessions.storage_path(test_root)
+
+  unwind.clear()
+  -- 1. Create and save Session A
+  unwind.ingest('File "session_a.py", line 10, in fn_a\n')
+  local s_a = unwind.state.active_session
+  unwind.ensure_sessions_loaded(test_root)
+  test_sessions.save_working(s_a, "Session A", unwind.state.sessions, test_root)
+
+  local f1 = io.open(storage_file, "r")
+  local disk1 = f1:read("*all")
+  f1:close()
+
+  -- 2. Ingest Trace B
+  unwind.ingest('File "session_b.py", line 99, in fn_b\n')
+  local s_b = unwind.state.active_session
+  assert_true(not s_b.saved, "Session B must be unsaved working session")
+  assert_eq(s_b.name, nil, "Session B must be unnamed")
+
+  -- 3. Verify disk content for Session A was untouched
+  local f2 = io.open(storage_file, "r")
+  local disk2 = f2:read("*all")
+  f2:close()
+  assert_eq(disk1, disk2, "Disk state for saved Session A must remain untouched by new ingestion")
+
+  -- Cleanup
+  test_sessions.delete(s_a, unwind.state.sessions, test_root)
+  pcall(os.remove, storage_file)
+  unwind.clear()
+end
+
+print("--> [Session Spec 3] Missing file after persistence shows red N/A without empty buffer...")
+do
+  local test_sessions = require("unwind.sessions")
+  local test_sidebar = require("unwind.sidebar")
+  local test_root = vim.fs.normalize(vim.fn.getcwd())
+  local dummy_file = test_root .. "/tests/fixtures/session_dummy.py"
+  local f = io.open(dummy_file, "w")
+  f:write("print('hello')\n")
+  f:close()
+
+  unwind.clear()
+  unwind.ingest('File "tests/fixtures/session_dummy.py", line 1, in run\n')
+  local s = unwind.state.active_session
+  unwind.ensure_sessions_loaded(test_root)
+  test_sessions.save_working(s, "Dummy Session", unwind.state.sessions, test_root)
+
+  -- Delete source file
+  os.remove(dummy_file)
+  local b = vim.fn.bufnr(dummy_file)
+  if b ~= -1 then pcall(vim.api.nvim_buf_delete, b, { force = true }) end
+
+  local bufs_before = #vim.api.nvim_list_bufs()
+  unwind.activate_session(s)
+  local bufs_after = #vim.api.nvim_list_bufs()
+
+  -- Verify no empty buffer was created for the missing file
+  assert_true(test_sidebar.is_open(), "sidebar opened on session activation")
+  assert_eq(s.files[1].available, false, "file must be marked unavailable")
+  assert_eq(s.active_index, 1, "missing frame selected")
+  assert_true(bufs_after <= bufs_before + 1, "no empty source buffer created (only sidebar buffer allowed)")
+
+  test_sidebar.hide()
+  test_sessions.delete(s, unwind.state.sessions, test_root)
+  local storage_file = test_sessions.storage_path(test_root)
+  pcall(os.remove, storage_file)
+  unwind.clear()
+end
+
+print("--> [Session Spec 4] Frame cycling across missing and valid frames with sidebar synchronization...")
+do
+  local test_sidebar = require("unwind.sidebar")
+  unwind.clear()
+  local trace = [[
+  File "missing_a.py", line 10, in fn_a
+  File "tests/fixtures/dummy.txt", line 1, in fn_b
+  File "missing_c.py", line 30, in fn_c
+]]
+  unwind.ingest(trace)
+  unwind.toggle_sidebar()
+  assert_true(test_sidebar.is_open(), "sidebar is open")
+
+  -- Frame 1 (missing)
+  assert_eq(unwind.state.active_index, 1, "frame 1 active")
+  local decor_ns = require("unwind.decorator").get_namespace()
+  local marks1 = vim.api.nvim_buf_get_extmarks(0, decor_ns, 0, -1, {})
+  assert_eq(#marks1, 0, "no source decoration for missing frame 1")
+
+  -- Cycle next -> Frame 2 (valid)
+  unwind.next()
+  assert_eq(unwind.state.active_index, 2, "frame 2 active")
+  local cur_buf = vim.api.nvim_get_current_buf()
+  assert_true(vim.api.nvim_buf_get_name(cur_buf):find("dummy%.txt") ~= nil, "source window opened dummy.txt")
+  local marks2 = vim.api.nvim_buf_get_extmarks(cur_buf, decor_ns, 0, -1, {})
+  assert_true(#marks2 > 0, "source decoration rendered for valid frame 2")
+
+  -- Cycle next -> Frame 3 (missing)
+  unwind.next()
+  assert_eq(unwind.state.active_index, 3, "frame 3 active")
+  local marks3 = vim.api.nvim_buf_get_extmarks(cur_buf, decor_ns, 0, -1, {})
+  assert_eq(#marks3, 0, "source decoration cleared when moving to missing frame 3")
+
+  test_sidebar.hide()
+  unwind.clear()
+end
+
+print("--> [Session Spec 5] Sidebar frame deletion ('d') persists for saved session...")
+do
+  local test_sessions = require("unwind.sessions")
+  local test_sidebar = require("unwind.sidebar")
+  local test_root = vim.fs.normalize(vim.fn.getcwd())
+  local storage_file = test_sessions.storage_path(test_root)
+
+  unwind.clear()
+  local trace = [[
+  File "tests/fixtures/dummy.txt", line 1, in f1
+  File "tests/fixtures/dummy.txt", line 1, in f2
+  File "tests/fixtures/dummy.txt", line 1, in f3
+]]
+  unwind.ingest(trace)
+  local s = unwind.state.active_session
+  unwind.ensure_sessions_loaded(test_root)
+  test_sessions.save_working(s, "Delete Test", unwind.state.sessions, test_root)
+
+  assert_eq(#s.raw_frames, 3, "3 raw frames originally")
+  unwind.toggle_sidebar()
+
+  -- Delete frame 2
+  unwind.delete_frame_from_session(s, 2)
+  assert_eq(#s.raw_frames, 2, "2 raw frames after deletion")
+  assert_eq(#s.frames, 2, "2 derived frames after deletion")
+
+  -- Verify persisted immediately
+  local reloaded = test_sessions.load(test_root)
+  assert_eq(#reloaded[1].raw_frames, 2, "persisted session has 2 frames after deletion")
+
+  test_sidebar.hide()
+  test_sessions.delete(s, unwind.state.sessions, test_root)
+  pcall(os.remove, storage_file)
+  unwind.clear()
+end
+
+print("--> [Session Spec 6] Navigation while sidebar has focus preserves sidebar window...")
+do
+  local test_sidebar = require("unwind.sidebar")
+  unwind.clear()
+  unwind.ingest('File "tests/fixtures/dummy.txt", line 1, in fn1\nFile "tests/fixtures/dummy.txt", line 1, in fn2\n')
+  unwind.toggle_sidebar()
+  assert_true(test_sidebar.is_open(), "sidebar open")
+
+  -- Focus sidebar window
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    if test_sidebar.is_sidebar_window(w) then
+      vim.api.nvim_set_current_win(w)
+      break
+    end
+  end
+  assert_true(test_sidebar.is_sidebar_window(), "focused in sidebar")
+
+  -- Trigger next()
+  unwind.next()
+
+  -- Verify sidebar window buffer was not replaced
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    if test_sidebar.is_sidebar_window(w) then
+      local b = vim.api.nvim_win_get_buf(w)
+      assert_true(vim.api.nvim_buf_get_name(b):find("unwind://sidebar") ~= nil, "sidebar window must retain sidebar buffer")
+    end
+  end
+
+  test_sidebar.hide()
+  unwind.clear()
+end
+
+print("--> [Session Spec 7] :UnwindClear is non-destructive to saved sessions...")
+do
+  local test_sessions = require("unwind.sessions")
+  local test_root = vim.fs.normalize(vim.fn.getcwd())
+  local storage_file = test_sessions.storage_path(test_root)
+
+  unwind.clear()
+  unwind.ingest('File "session_clear.py", line 5, in fn\n')
+  local s = unwind.state.active_session
+  unwind.ensure_sessions_loaded(test_root)
+  test_sessions.save_working(s, "Preserved Session", unwind.state.sessions, test_root)
+
+  -- Run clear()
+  unwind.clear()
+  assert_true(unwind.state.active_session == nil, "active_session is deactivated")
+
+  -- Verify session still exists in persisted sessions list
+  local reloaded = test_sessions.load(test_root)
+  assert_eq(#reloaded, 1, "saved session was NOT deleted by clear()")
+  assert_eq(reloaded[1].name, "Preserved Session", "saved session intact")
+
+  test_sessions.delete(reloaded[1], unwind.state.sessions, test_root)
+  pcall(os.remove, storage_file)
+end
+
+print("--> [Session Spec 8] Persistence hot-path assertion: zero disk writes during navigation...")
+do
+  local test_sessions = require("unwind.sessions")
+  local orig_save = test_sessions.save
+  local save_called = false
+  test_sessions.save = function(...)
+    save_called = true
+    return orig_save(...)
+  end
+
+  unwind.clear()
+  unwind.ingest([[
+  File "tests/fixtures/dummy.txt", line 1, in f1
+  File "tests/fixtures/dummy.txt", line 1, in f2
+  File "missing.py", line 1, in f3
+]])
+
+  save_called = false
+  unwind.next()
+  assert_true(not save_called, "next() must not write to disk")
+  unwind.prev()
+  assert_true(not save_called, "prev() must not write to disk")
+  unwind.next_file()
+  assert_true(not save_called, "next_file() must not write to disk")
+  unwind.prev_file()
+  assert_true(not save_called, "prev_file() must not write to disk")
+
+  test_sessions.save = orig_save
+  unwind.clear()
+end
