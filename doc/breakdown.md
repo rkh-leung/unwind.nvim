@@ -42,7 +42,18 @@ This guide is designed for engineers who are working on `unwind.nvim`. We cover 
 │       ├── parser.lua      # Pattern matcher: parses multi-language stack traces & normalizes paths
 │       ├── collector.lua   # Aggregator: deduplicates files in trace order & tags vendor paths
 │       ├── decorator.lua   # Extmarks: renders virtual line banners (virt_lines) above fault lines
-│       └── ui.lua          # Floating UI: session manager float, input scratchpad, single-line prompt
+│       ├── ui.lua          # Floating UI: session manager float, input scratchpad, single-line prompt
+│       └── resolvers/      # Multi-tiered path resolution subsystem
+│           ├── init.lua    # Resolver pipeline coordinator (workspace -> mappings -> language)
+│           ├── workspace.lua # Local workspace and container prefix resolution
+│           └── ruby/       # Ruby language resolver (gems, git gems, stdlib)
+│               ├── init.lua        # Public Ruby resolver interface
+│               ├── environment.lua # Version discovery & runtime probe cache
+│               ├── path.lua        # Path pattern extractor
+│               ├── gems.lua        # Exact gem-version matching
+│               ├── git_gems.lua    # Bundler git gems matching
+│               ├── stdlib.lua      # Standard library resolution
+│               └── managers/       # Adapters: rbenv, asdf, mise, chruby, rvm, system
 └── tests/
     ├── fixtures/           # Real-world crash traces and test dummy files
     ├── parser_spec.lua     # Automated functional, regression, and invariant test suite
@@ -62,7 +73,7 @@ This guide is designed for engineers who are working on `unwind.nvim`. We cover 
 
 Key points:
 - Prevents redundant execution using `vim.g.loaded_unwind`.
-- Registers user commands: `:Unwind`, `:UnwindFile`, `:UnwindInput`, `:UnwindClipboard`, `:UnwindSelection`, `:UnwindMenu`, `:UnwindSidebar`, `:UnwindNext`, `:UnwindPrev`, `:UnwindNextFile`, `:UnwindPrevFile`, `:UnwindToggleFilter`, `:UnwindQuickfix`, `:UnwindClear`.
+- Registers user commands: `:Unwind`, `:UnwindFile`, `:UnwindInput`, `:UnwindClipboard`, `:UnwindSelection`, `:UnwindMenu`, `:UnwindSidebar`, `:UnwindNext`, `:UnwindPrev`, `:UnwindNextFile`, `:UnwindPrevFile`, `:UnwindToggleFilter`, `:UnwindQuickfix`, `:UnwindClear`, `:UnwindRubyInfo`.
 - Calls `unwind.install_keymaps()` to bind default single-key leader shortcuts (`<leader>w`, `<leader>c`) without overriding custom user keymaps unless explicitly forced.
 
 ---
@@ -149,6 +160,23 @@ Compatibility metatable `M.state` delegates queries like `unwind.state.frames` t
 - `open_session_manager(items, callbacks)`: Interactive session manager floating menu with open, save, rename (`r`), and delete (`d`) actions.
 - `open_input(on_submit)`: Scratchpad for pasting stacktraces with `<C-s>` and `:w` support.
 - `prompt_input(title, default_val, on_submit)`: Single-line modal for naming and renaming sessions.
+
+---
+
+### 9. `lua/unwind/resolvers/`
+
+**Purpose:** Multi-tiered path resolution pipeline converting remote/container paths to local files.
+
+- `resolvers/init.lua`: Coordinates resolver precedence:
+  1. Workspace resolver (`resolvers/workspace.lua`).
+  2. Configured user `path_mappings`.
+  3. Language resolvers (`resolvers/ruby/`).
+- `resolvers/ruby/`:
+  - `environment.lua`: Version discovery (`.ruby-version`, `.tool-versions`, `mise.toml`, `.mise.toml`, `Gemfile`) and runtime environment probing. Caches results per project root to prevent spawning ruby processes repeatedly.
+  - `managers/`: Filesystem-based adapter discovery for `rbenv`, `asdf`, `mise`, `chruby`, `rvm`, and `system`.
+  - `gems.lua`: Exact gem-version resolution against RubyGems installation roots.
+  - `git_gems.lua`: Bundler git gem resolution under `bundler/gems/`.
+  - `stdlib.lua`: Ruby standard library resolution against `rubylibdir`, `archdir`, `sitelibdir`, `vendorlibdir`.
 
 ---
 

@@ -1480,8 +1480,14 @@ do
   local side_buf = vim.fn.bufnr("unwind://sidebar")
   assert_true(side_buf ~= -1, "sidebar buffer found")
   local lines = vim.api.nvim_buf_get_lines(side_buf, 0, -1, false)
-  local last_line = lines[#lines]
-  assert_true(last_line:find("1/1 tests/fixtures/dummy.txt:1") ~= nil, "footer must be present after activating reloaded session, got: " .. tostring(last_line))
+  local footer_found = false
+  for _, l in ipairs(lines) do
+    if l:find("1/1 tests/fixtures/dummy.txt:1") then
+      footer_found = true
+      break
+    end
+  end
+  assert_true(footer_found, "footer must be present after activating reloaded session, lines: " .. vim.inspect(lines))
 
   test_sidebar.hide()
   test_sessions.delete(reloaded[1], unwind.state.sessions, test_root)

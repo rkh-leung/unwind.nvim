@@ -296,6 +296,19 @@ function M.resolve_and_normalize_path(raw_path, opts)
     end
   end
 
+  -- Check language resolvers (e.g. Ruby gems, git gems, stdlib)
+  local ok_ruby, ruby_resolver = pcall(require, "unwind.resolvers.ruby")
+  if ok_ruby and ruby_resolver and ruby_resolver.resolve then
+    local r_res = ruby_resolver.resolve(raw_path, { root = root })
+    if r_res and r_res.path and file_exists(r_res.path) then
+      local display = normalized
+      if is_in_root then
+        display = normalized:sub(#root + 1)
+      end
+      return store_cache(display, r_res.path, true)
+    end
+  end
+
   -- If no local match found, return the sanitized path
   local abs = normalized
   if normalized:sub(1, 1) ~= "/" and not normalized:match("^%a:[/\\]") then
@@ -507,8 +520,31 @@ local matchers = {
   end,
 }
 
+---@class UnwindResolution
+---@field manager? string
+---@field ruby_version? string
+---@field gem? string
+---@field gem_version? string
+---@field revision? string
+---@field stdlib_module? string
+
+---@class UnwindFrame
+---@field path string              -- original trace path
+---@field resolved_path string?    -- local navigable path
+---@field file string              -- display path or relative path
+---@field line integer
+---@field col integer?
+---@field column integer?
+---@field method string?
+---@field navigable boolean?
+---@field external boolean?
+---@field source_kind string?      -- "workspace" | "ruby_gem" | "ruby_bundler_git" | "ruby_stdlib" | etc.
+---@field resolution UnwindResolution?
+---@field raw_line string?
+---@field origin string?
+
 --- Parses a raw plain-text stacktrace into a list of frame objects:
---- { file, resolved_path, navigable, line, col, method, raw_line }
+--- { path, file, resolved_path, navigable, line, col, method, raw_line, external, source_kind, resolution }
 --- Inverts Python traceback blocks individually so that crash-first navigation starts
 --- at the innermost fault frame instead of the outermost frame, without reordering
 --- unrelated non-Python stack frames in a mixed trace.
@@ -608,11 +644,29 @@ function M.parse(text, opts)
         end
 
         if matched_frame then
-          local display, resolved, navigable = M.resolve_and_normalize_path(matched_frame.file, norm_opts)
+          local original_path = matched_frame.file
+          local display, resolved, navigable = M.resolve_and_normalize_path(original_path, norm_opts)
+
+          -- Check Ruby language resolver for metadata enrichment
+          local ok_ruby, ruby_resolver = pcall(require, "unwind.resolvers.ruby")
+          local ruby_meta = nil
+          if ok_ruby and ruby_resolver and ruby_resolver.resolve then
+            ruby_meta = ruby_resolver.resolve(original_path, { root = opts.root })
+          end
+
           matched_frame.raw_line = line
+          matched_frame.path = original_path
           matched_frame.file = display
-          matched_frame.resolved_path = resolved
-          matched_frame.navigable = navigable
+          if ruby_meta and ruby_meta.path then
+            matched_frame.resolved_path = ruby_meta.path
+            matched_frame.navigable = true
+            matched_frame.external = true
+            matched_frame.source_kind = ruby_meta.source_kind
+            matched_frame.resolution = ruby_meta.resolution
+          else
+            matched_frame.resolved_path = resolved
+            matched_frame.navigable = navigable
+          end
           matched_frame.method = matched_frame.method or ""
 
           if is_python_frame then

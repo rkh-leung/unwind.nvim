@@ -6,7 +6,7 @@
 
 Debugging sessions are managed via a persistent session manager (`<leader>w`), inspected with an editable Yazi-style persistent right vertical split sidebar (`sidebar.lua`), and projected as inline virtual line (`virt_lines`) telemetry at fault locations.
 
-The plugin requires zero external binary dependencies (no external Rust, Go, or Python binaries, and no RPC servers). All parsing, session persistence, Tree-sitter AST resolution, and telemetry injection run in-process via LuaJIT with minimal overhead.
+The plugin requires zero external binary dependencies for core Unwind (no external Rust, Go, or Python binaries, and no RPC servers). All parsing, session persistence, Tree-sitter AST resolution, and telemetry injection run in-process via LuaJIT with minimal overhead. Optional language source enrichment (e.g. Ruby gems and stdlib resolution) optionally queries the project's local language runtime once to discover exact installed library paths.
 
 ---
 
@@ -39,7 +39,11 @@ unwind.nvim/
 │   ├── parser.lua       # Multi-language stacktrace pattern matcher and path normalizer
 │   ├── collector.lua    # Frame aggregation, file deduplication, and vendor filtering logic
 │   ├── decorator.lua    # Neovim extmarks & virt_lines inline telemetry projection
-│   └── ui.lua           # Session manager floating menu, scratchpad input float, and name prompts
+│   ├── ui.lua           # Session manager floating menu, scratchpad input float, and name prompts
+│   └── resolvers/       # Multi-tiered path resolution subsystem
+│       ├── init.lua     # Central resolver chain (workspace -> mappings -> language)
+│       ├── workspace.lua # Workspace path normalizer and container prefix stripper
+│       └── ruby/        # Ruby environment detection, gems, git gems, and stdlib resolver
 └── tests/
     ├── fixtures/        # Sample stack traces (Raygun, Rust, Node.js, Ruby, dummy fixtures)
     ├── parser_spec.lua  # Headless test runner testing parsing, navigation, persistence, and invariants
@@ -103,6 +107,7 @@ unwind.nvim/
   - `:UnwindToggleFilter`: Toggles vendor / out-of-workspace library filtering while preserving active context.
   - `:UnwindQuickfix`: Exports active stacktrace frames to Neovim's quickfix list.
   - `:UnwindClear`: Clears all extmarks, hides sidebar, and deactivates active session non-destructively.
+  - `:UnwindRubyInfo`: Displays diagnostic information about the detected Ruby environment, managers, and gem roots.
 - Installs default keymaps with tracked ownership in `_installed_keymaps`.
 
 ### 2.2 Core Controller & State (`lua/unwind/init.lua`)
@@ -141,6 +146,19 @@ Processes text line-by-line across Raygun/.NET, Java, Rust, Node.js/V8, Python, 
 - Injects non-invasive `virt_lines` telemetry above fault lines using `unwind_diagnostics` namespace.
 - Session manager modal (`ui.open_session_manager`) handles saving, selecting, renaming, and deleting saved sessions.
 - Input scratchpad (`ui.open_input`) enables direct pasting of trace text with `<C-s>` / `:w` submission.
+
+### 2.7 Multi-Tiered Path Resolvers (`lua/unwind/resolvers/`)
+- **Resolver Pipeline (`resolvers/init.lua`)**:
+  1. Workspace resolver: verifies filesystem paths and relative paths inside project root, with container prefix stripping (`/app/`, `/var/task/`).
+  2. Configured `path_mappings`: user overrides applied longest prefix first.
+  3. Language resolvers: detects runtime environments and locates external packages and standard libraries.
+- **Ruby Resolver (`resolvers/ruby/`)**:
+  - `environment.lua`: Version discovery across `.ruby-version`, `.tool-versions`, `mise.toml`, `.mise.toml`, and `Gemfile`.
+  - `managers/`: Non-shell filesystem inspection for `rbenv`, `asdf`, `mise`, `chruby`, `rvm`, and system Ruby.
+  - Probes discovered binary once via JSON for `gem_paths`, `gem_dir`, `rubylibdir`, caching results per project root.
+  - `gems.lua`: Exact gem-version matching without fuzzy version fallback.
+  - `git_gems.lua`: Bundler git gem resolution under `bundler/gems/`.
+  - `stdlib.lua`: Standard library resolution against Ruby runtime library directories.
 
 ---
 

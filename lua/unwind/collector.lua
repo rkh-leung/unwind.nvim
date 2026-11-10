@@ -106,6 +106,9 @@ function M.collect(frames, opts)
 
   local vendor_cache = {}
   local function is_vendor(fpath)
+    if not fpath then
+      return false
+    end
     local cached = vendor_cache[fpath]
     if cached ~= nil then
       return cached
@@ -121,7 +124,7 @@ function M.collect(frames, opts)
     local should_ignore = false
 
     if filter_vendor then
-      if is_vendor(fpath) or is_vendor(frame.file) then
+      if frame.external == true or is_vendor(fpath) or is_vendor(frame.file) or is_vendor(frame.path) then
         should_ignore = true
       end
     end
@@ -157,7 +160,10 @@ function M.collect(frames, opts)
         primary_frame_index = frame_idx,
         total_frames = 1,
         frames = { frame },
-        is_vendor = is_vendor(frame.resolved_path or frame.file) or is_vendor(frame.file),
+        is_vendor = (frame.external == true) or is_vendor(frame.resolved_path or frame.file) or is_vendor(frame.file) or is_vendor(frame.path),
+        external = frame.external,
+        source_kind = frame.source_kind,
+        resolution = frame.resolution,
       }
       table.insert(files, entry)
       local new_f_idx = #files

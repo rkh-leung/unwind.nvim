@@ -6,7 +6,7 @@ A debugging session in `unwind.nvim` is a **mutable ordered list of source locat
 
 Debugging sessions are managed through a centralized session manager (`<leader>w`), edited and navigated via a Yazi-style persistent right vertical split sidebar, and projected as inline call-path telemetry into source buffers using Neovim's extended marks (`virt_lines`) API.
 
-There are zero external binary dependencies (no external CLI tools, no external JSON parsers, no database, no RPC processes). All parsing, session persistence, Tree-sitter function resolution, and buffer navigation run entirely in-process within Neovim.
+There are zero external binary dependencies for core Unwind (no external CLI tools, no external JSON parsers, no database, no RPC processes). All parsing, session persistence, Tree-sitter function resolution, and buffer navigation run entirely in-process within Neovim. Optional language source enrichment (such as Ruby gem and stdlib resolution) optionally queries the project's local language runtime once to discover exact installed library paths.
 
 ---
 
@@ -75,6 +75,11 @@ You can start a session from scratch without having a stacktrace at all. Run `:U
   - `r`: Refresh file availability.
   - `q`: Hide sidebar.
 - **Pure Lua In-Memory Parsing**: Ingests and parses crash stacktraces in-process via native Lua pattern matching (Raygun/.NET, Java, Rust, Node.js/V8, Python, Ruby, compiler errors, generic logs).
+- **Multi-Tiered Path Resolvers (Ruby Gems, Bundler Git, & Stdlib)**: Automatically enriches deployed container / production traces into navigable local files:
+  - Application workspace resolver with container prefix stripping (`/app/`, `/var/task/`).
+  - Configurable `path_mappings`.
+  - Ruby environment discovery (detects `.ruby-version`, `.tool-versions`, `mise.toml`, `.mise.toml`, `Gemfile`) across version managers (`rbenv`, `asdf`, `mise`, `chruby`, `rvm`, system).
+  - Exact gem-version matching, Bundler git gem resolution, and Ruby standard library resolution.
 - **Named Persistent Debugging Sessions**: Transient sessions (`name = nil`) stay in-memory; named sessions persist immediately across Neovim restarts in `stdpath("state")/unwind/` scoped to your repository root.
 - **First-Class Missing File Handling**: Missing or deleted files remain selectable as red `N/A` positions without creating dummy buffers or crashing.
 - **Inline Virtual Line Telemetry**: Extended mark (`virt_lines`) decorations above fault lines with frame depth (`#depth/total`), method name, file, and line information.
@@ -219,6 +224,7 @@ All leader keymaps follow single-key mappings:
 | `:UnwindToggleFilter` | Toggles filtering out vendor / third-party library files |
 | `:UnwindQuickfix` | Exports active stacktrace frames to Neovim's quickfix list |
 | `:UnwindClear` | Clears active decorations and deactivates active session |
+| `:UnwindRubyInfo` | Displays diagnostic information about the detected Ruby environment, managers, and gem roots |
 
 ---
 

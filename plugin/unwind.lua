@@ -71,4 +71,8 @@ vim.api.nvim_create_user_command("UnwindClear", function()
   require("unwind").clear()
 end, { desc = "Clear active decorations and state" })
 
+vim.api.nvim_create_user_command("UnwindRubyInfo", function()
+  require("unwind").ruby_info()
+end, { desc = "Display Unwind Ruby environment diagnostics" })
+
 -- Keymaps are managed by require("unwind").setup()

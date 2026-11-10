@@ -39,7 +39,7 @@ end
 function M.serialize_session(session)
   local frames = {}
   for _, f in ipairs(session.raw_frames or {}) do
-    table.insert(frames, {
+    local serialized_f = {
       path = f.path or f.resolved_path or f.file,
       file = f.file,
       line = f.line,
@@ -47,7 +47,17 @@ function M.serialize_session(session)
       method = f.method or "",
       origin = f.origin or "stacktrace",
       raw_line = f.raw_line or "",
-    })
+    }
+    if f.external ~= nil then
+      serialized_f.external = f.external
+    end
+    if f.source_kind ~= nil then
+      serialized_f.source_kind = f.source_kind
+    end
+    if f.resolution ~= nil then
+      serialized_f.resolution = f.resolution
+    end
+    table.insert(frames, serialized_f)
   end
 
   return {
@@ -111,6 +121,9 @@ function M.load(root)
           method = f.method or "",
           origin = f.origin or "stacktrace",
           raw_line = f.raw_line or "",
+          external = f.external,
+          source_kind = f.source_kind,
+          resolution = f.resolution,
         })
       end
 
@@ -205,6 +218,9 @@ local function normalize_frame(frame)
   local method = frame.method or ""
   local origin = frame.origin or "stacktrace"
   local raw_line = frame.raw_line or ""
+  local external = frame.external
+  local source_kind = frame.source_kind
+  local resolution = frame.resolution
 
   return {
     path = path,
@@ -217,6 +233,9 @@ local function normalize_frame(frame)
     raw_line = raw_line,
     resolved_path = frame.resolved_path,
     navigable = frame.navigable,
+    external = external,
+    source_kind = source_kind,
+    resolution = resolution,
   }
 end
 
