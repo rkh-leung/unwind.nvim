@@ -1185,17 +1185,96 @@ function M.delete_frame_from_session(session, frame_idx)
 end
 
 --- Re-check availability of all unique files in active session
+--- Re-check availability of all unique files in active session, rerunning source resolution
 function M.refresh_availability()
   local session = raw_state.active_session
   if not session then return end
   local root = session.root or raw_state.root or vim.fs.normalize(vim.fn.getcwd())
-  for _, f_entry in ipairs(session.files or {}) do
-    local is_avail, resolved = M.check_file_availability(f_entry.resolved_path or f_entry.file, root)
-    f_entry.available = is_avail
-    f_entry.canonical_resolved = resolved
+
+  -- Flush ruby environment cache if requested to re-probe
+  local ok_ruby, ruby_resolver = pcall(require, "unwind.resolvers.ruby")
+  if ok_ruby and ruby_resolver and ruby_resolver.resolve then
+    -- re-resolve all raw_frames
+    for _, f in ipairs(session.raw_frames or {}) do
+      local orig_path = f.path or f.file
+      local norm_opts = {
+        root = root,
+        path_mappings = M.config.path_mappings,
+      }
+      local display, resolved, navigable = parser.resolve_and_normalize_path(orig_path, norm_opts)
+      local ruby_meta = ruby_resolver.resolve(orig_path, { root = root, force_reload = true })
+      if ruby_meta and ruby_meta.path then
+        f.resolved_path = ruby_meta.path
+        f.navigable = true
+        f.external = true
+        f.source_kind = ruby_meta.source_kind
+        f.resolution = ruby_meta.resolution
+      else
+        f.resolved_path = resolved
+        f.navigable = navigable
+      end
+    end
   end
+
+  M.rebuild_derived(session)
   sidebar.render(session)
   vim.notify("Unwind: Refreshed file availability.", vim.log.levels.INFO)
+end
+
+--- Show Ruby environment diagnostic info
+function M.ruby_info()
+  local root = (raw_state.active_session and raw_state.active_session.root) or raw_state.root or vim.fs.normalize(vim.fn.getcwd())
+  local ok_ruby, ruby = pcall(require, "unwind.resolvers.ruby")
+  if not ok_ruby or not ruby then
+    vim.notify("Unwind: Ruby resolver not available.", vim.log.levels.ERROR)
+    return
+  end
+
+  local env = ruby.info(root)
+  if not env then
+    local lines = {
+      "Unwind Ruby environment",
+      "",
+      "Project: " .. root,
+      "Status: No Ruby environment detected or probe failed.",
+    }
+    vim.notify(table.concat(lines, "\n"), vim.log.levels.WARN)
+    return
+  end
+
+  local lines = {
+    "Unwind Ruby environment",
+    "",
+    "Project:",
+    "  " .. tostring(env.root),
+    "",
+    "Manager:",
+    "  " .. tostring(env.manager),
+    "",
+    "Ruby version:",
+    "  " .. tostring(env.ruby_version) .. (env.discovered_version and (" (declared: " .. env.discovered_version .. " in " .. tostring(env.version_source) .. ")") or ""),
+    "",
+    "Ruby executable:",
+    "  " .. tostring(env.ruby_bin),
+    "",
+    "Ruby API:",
+    "  " .. tostring(env.ruby_api_version),
+    "",
+    "Gem home:",
+    "  " .. tostring(env.gem_dir),
+    "",
+    "Gem roots:",
+  }
+  for _, gp in ipairs(env.gem_paths or {}) do
+    table.insert(lines, "  " .. tostring(gp))
+  end
+  table.insert(lines, "")
+  table.insert(lines, "Stdlib:")
+  table.insert(lines, "  " .. tostring(env.rubylibdir))
+
+  local text = table.concat(lines, "\n")
+  print(text)
+  vim.notify(text, vim.log.levels.INFO)
 end
 
 return M
