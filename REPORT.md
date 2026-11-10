@@ -1,0 +1,153 @@
+# Technical Report: unwind.nvim Architecture & Operational Walkthrough
+
+## Executive Summary
+
+`unwind.nvim` is a lightweight, standalone Neovim plugin designed for Neovim >= 0.10. It transforms plain-text crash stacktraces and compiler error logs into navigable Neovim source locations and persistent debugging sessions. Traces are parsed entirely in-memory using pure Lua pattern matching, managed via a persistent session manager (`<leader>w`), inspected with a Yazi-style persistent right vertical split sidebar (`sidebar.lua`), and projected as inline virtual line (`virt_lines`) telemetry at fault locations.
+
+The plugin requires zero external binary dependencies (no external Rust, Go, or Python binaries, and no RPC servers). All parsing, session persistence, and telemetry injection run in-process via LuaJIT with minimal overhead.
+
+---
+
+## 1. High-Level Architecture & Persistence Model
+
+The plugin follows a layered lifecycle architecture:
+
+```text
+persistent stable trace (stdpath("state")/unwind/<sha256(root)>.json)
+        ↓
+runtime-derived frames/files/availability
+        ↓
+active session
+     ↙       ↘
+ source     sidebar
+```
+
+```text
+unwind.nvim/
+├── plugin/
+│   └── unwind.lua       # Auto-loaded entry point registering Vim commands and keymaps
+├── lua/unwind/
+│   ├── init.lua         # Plugin lifecycle, state orchestration, navigation controller, public API
+│   ├── sessions.lua     # Atomic persistence layer, session serialization, transactional state lifecycle
+│   ├── sidebar.lua      # Yazi-style persistent right-hand call-trace sidebar
+│   ├── parser.lua       # Multi-language stacktrace pattern matcher and path normalizer
+│   ├── collector.lua    # Frame aggregation, file deduplication, and vendor filtering logic
+│   ├── decorator.lua    # Neovim extmarks & virt_lines inline telemetry projection
+│   └── ui.lua           # Session manager floating menu, scratchpad input float, and name prompts
+└── tests/
+    ├── fixtures/        # Sample stack traces (Raygun, Rust, Node.js, Ruby, dummy fixtures)
+    ├── parser_spec.lua  # Headless test runner testing parsing, navigation, persistence, and invariants
+    └── leak_spec.lua    # Memory stability and lifecycle verification
+```
+
+### End-to-End Execution Flow
+
+```text
+[Clipboard (+)] or [Visual Selection] or [Log File]
+                        │
+                        ▼
+               unwind.ingest(text)
+                        │
+                        ▼
+               parser.parse(text)
+         ├── Pattern Matchers (Raygun, Rust, Node, Python, Ruby, Generic)
+         ├── Bounded frame retention (innermost frames for Python)
+         └── parser.resolve_and_normalize_path(path)
+                        │
+                        ▼
+             collector.collect(frames)
+         ├── Deduplicate unique files (preserving occurrence order)
+         ├── Tag vendor / out-of-workspace library frames
+         └── Group frames & determine primary fault line
+                        │
+                        ▼
+             sessions.new_working(...)  --> Transmit to active_session
+                        │
+                        ▼
+             unwind.jump_to_frame(1)
+         ├── ui.ensure_source_window()
+         ├── sidebar.ensure_source_window()
+         ├── check_file_availability() [disk authority]
+         ├── vim.cmd.edit(file)
+         ├── vim.api.nvim_win_set_cursor(...)
+         ├── decorator.render(bufnr, line, depth, method, file)
+         └── sidebar.set_active(session, 1)
+```
+
+---
+
+## 2. Component Deep Dive
+
+### 2.1 Entry Point (`plugin/unwind.lua`)
+- Registers user commands:
+  - `:Unwind`: Ingests stacktrace from an optional file argument or opens an interactive paste scratchpad.
+  - `:UnwindFile`: Ingests stacktrace from a specified file path.
+  - `:UnwindInput`: Opens an interactive scratchpad window to paste/type a stacktrace.
+  - `:UnwindClipboard`: Ingests trace from the `+` register.
+  - `:UnwindSelection`: Ingests visually selected text (`range = true`).
+  - `:UnwindMenu`: Opens the persistent session manager (`<leader>w`).
+  - `:UnwindSidebar`: Toggles the persistent right-hand call-trace sidebar.
+  - `:UnwindNext`: Cycles forward to the next stack frame (`]u`).
+  - `:UnwindPrev`: Cycles backward to the previous stack frame (`[u`).
+  - `:UnwindNextFile`: Cycles forward directly to the next unique file (`]f`).
+  - `:UnwindPrevFile`: Cycles backward directly to the previous unique file (`[f`).
+  - `:UnwindToggleFilter`: Toggles vendor / out-of-workspace library filtering while preserving active context.
+  - `:UnwindQuickfix`: Exports active stacktrace frames to Neovim's quickfix list.
+  - `:UnwindClear`: Clears all extmarks, hides sidebar, and deactivates active session non-destructively.
+- Installs default keymaps with tracked ownership in `_installed_keymaps`.
+
+### 2.2 Core Controller & State (`lua/unwind/init.lua`)
+`init.lua` orchestrates session management and navigation:
+```lua
+raw_state = {
+  root = nil,               -- Pinned project root at ingestion time
+  sessions = {},            -- Loaded saved sessions for project root
+  sessions_loaded = false,  -- Lazy-load flag
+  active_session = nil,     -- Currently active session table
+}
+```
+Key invariants & responsibilities:
+- **Disk as Sole Authority**: `check_file_availability()` checks filesystem presence directly (`fs_stat`). In-memory loaded buffers never mask deleted files, ensuring deleted files correctly display as red `N/A`.
+- **Fast Navigation Path**: During `jump_to_frame()`, cached `file_entry.canonical_resolved` is validated with a single `fs_stat` call instead of repeating multi-step path resolution heuristics.
+- **Synchronized Deletion**: When deleting a frame via `delete_frame_from_session()`, if the deleted frame was active, the nearest surviving frame is selected via `jump_to_frame()`, keeping the source buffer, cursor, extmark decorator, and sidebar strictly in sync. Non-active frame deletions preserve the active frame's identity.
+- **Window Isolation**: `ui.ensure_source_window()` and `sidebar.ensure_source_window()` guarantee navigation operates strictly in a normal source window, never in a floating window or the sidebar split.
+
+### 2.3 Persistent Sessions Store (`lua/unwind/sessions.lua`)
+- **Storage Scope**: Sessions are persisted per project root in `stdpath("state")/unwind/<sha256(root)>.json`.
+- **Stable Debugging Facts Only**: Only serializes `name`, `filter_enabled`, and `raw_frames` (`file`, `line`, `col`, `method`, `raw_line`). Transient state (buffer IDs, window IDs, extmarks, availability, active indices) is never persisted.
+- **Transactional Persistence**: `save_working()`, `rename()`, `delete()`, and frame deletion perform in-memory rollback if disk write fails.
+- **Atomic File Writes**: Serializes payload to `<filepath>.tmp.<hrtime>`, verifies return values of both `write()` and `flush()`, and renames atomically over the target state file.
+
+### 2.4 Call-Trace Sidebar (`lua/unwind/sidebar.lua`)
+- **Persistent Pane**: Renders active call frames in trace order inside a reusable right vertical split (`unwind://sidebar`).
+- **Missing File Highlighting**: Missing frames are highlighted red (`UnwindSidebarMissing`), including active missing frames.
+- **Always-Reserved Footer**: Reserves a footer row on initial render so subsequent session activations reliably update `1/N file:line`.
+- **Safe Row Actions**: Keymaps `<CR>` and `d` enforce upper-bound validation against `#session.frames`, preventing jumps on blank or footer rows.
+- **Fallback Split**: If the user closes all other windows leaving only the sidebar, `ensure_source_window()` opens a normal split window before navigating.
+
+### 2.5 Pure Lua Parsing & Normalization (`lua/unwind/parser.lua`)
+Processes text line-by-line across Raygun/.NET, Java, Rust, Node.js/V8, Python, Ruby, and generic formats. Python tracebacks invert frames per traceback block so innermost crash frames appear first. Container path prefixes (`/app/`, `/var/task/`, `C:\workspace\`) are normalized to local workspace paths.
+
+### 2.6 Extmarks & Floating Menu (`lua/unwind/decorator.lua` & `lua/unwind/ui.lua`)
+- Injects non-invasive `virt_lines` telemetry above fault lines using `unwind_diagnostics` namespace.
+- Session manager modal (`ui.open_session_manager`) handles saving, selecting, renaming, and deleting saved sessions.
+- Input scratchpad (`ui.open_input`) enables direct pasting of trace text with `<C-s>` / `:w` submission.
+
+---
+
+## 3. Configuration & Keybindings
+
+All default leader keymaps follow single-key bindings:
+
+| Action | Command | Default Keymap | Description |
+|---|---|---|---|
+| Session Manager | `:UnwindMenu` | `<leader>w` | Open persistent session manager |
+| Ingest Clipboard | `:UnwindClipboard` | `<leader>c` | Ingest stacktrace from clipboard (`+`) |
+| Next Frame | `:UnwindNext` | `]u` | Jump to next stack frame |
+| Previous Frame | `:UnwindPrev` | `[u` | Jump to previous stack frame |
+| Next File | `:UnwindNextFile` | `]f` | Jump directly to next unique file |
+| Previous File | `:UnwindPrevFile` | `[f` | Jump directly to previous unique file |
+| Toggle Sidebar | `:UnwindSidebar` | - | Toggle persistent call-trace sidebar |
+| Toggle Filter | `:UnwindToggleFilter` | - | Toggle hiding/showing vendor & external frames |
+| Quickfix Export | `:UnwindQuickfix` | - | Export stack frames to Neovim's quickfix list |
+| Clear Telemetry | `:UnwindClear` | - | Clear active decorations and deactivate session |
