@@ -550,27 +550,4 @@ function M.open_input(on_submit)
   })
 end
 
---- Backward-compatible shim for tests directly calling ui.open(files, on_select)
-function M.open(files, on_select)
-  local items = {}
-  for idx, f in ipairs(files or {}) do
-    table.insert(items, {
-      type = "session",
-      name = f.file,
-      frame_count = f.total_frames or 1,
-      session = f,
-    })
-  end
-  M.open_session_manager(items, {
-    on_select = function(s)
-      for idx, f in ipairs(files or {}) do
-        if f == s then
-          on_select(s, idx)
-          break
-        end
-      end
-    end,
-  })
-end
-
 return M

@@ -190,19 +190,6 @@ function M.check_file_availability(file_path, root)
     return true, target_path
   end
 
-  local existing_buf = vim.fn.bufnr(target_path)
-  if existing_buf == -1 and file_path then
-    existing_buf = vim.fn.bufnr(file_path)
-  end
-
-  -- Only treat an existing buffer as available if it is loaded and not a newly-created empty unwritten buffer
-  if existing_buf ~= -1 and vim.api.nvim_buf_is_valid(existing_buf) and vim.api.nvim_buf_is_loaded(existing_buf) then
-    local lines = vim.api.nvim_buf_get_lines(existing_buf, 0, -1, false)
-    if #lines > 1 or (#lines == 1 and lines[1] ~= "") then
-      return true, target_path
-    end
-  end
-
   return false, target_path
 end
 
@@ -276,12 +263,37 @@ function M.jump_to_frame(idx)
   local frame = session.frames[idx]
   local root = session.root or raw_state.root or vim.fs.normalize(vim.fn.getcwd())
 
-  -- Revalidate availability on selection
+  -- Fast-path availability check on selection:
+  -- Session activation and 'r' refresh perform full resolution once per unique file.
+  -- Navigation checks the cached resolved path with a single fs_stat.
   local file_entry = (frame.file_index and session.files) and session.files[frame.file_index] or nil
-  local is_avail, resolved_path = M.check_file_availability(frame.resolved_path or frame.file, root)
+  local target_candidate = (file_entry and file_entry.canonical_resolved)
+    or frame.resolved_path
+    or frame.file
+
+  local is_avail = false
+  local resolved_path = target_candidate
+  if not parser.is_non_navigable_path(frame.file) and target_candidate and target_candidate ~= "" then
+    local check_path = target_candidate
+    if check_path:sub(1, 1) ~= "/" and not check_path:match("^%a:[/\\]") then
+      check_path = root .. "/" .. check_path
+    end
+    check_path = vim.fs.normalize(check_path)
+    local stat = (vim.uv or vim.loop).fs_stat(check_path)
+    if not stat or stat.type ~= "file" then
+      stat = (vim.uv or vim.loop).fs_stat(target_candidate)
+    end
+    if stat and stat.type == "file" then
+      is_avail = true
+      resolved_path = check_path
+    end
+  end
+
   if file_entry then
     file_entry.available = is_avail
-    file_entry.canonical_resolved = resolved_path
+    if is_avail then
+      file_entry.canonical_resolved = resolved_path
+    end
   end
 
   if not is_avail or parser.is_non_navigable_path(frame.file) then
@@ -796,12 +808,16 @@ function M.menu()
       end)
     end,
     on_delete = function(target_session)
-      sessions.delete(target_session, raw_state.sessions, root)
-      vim.notify("Unwind: Deleted session '" .. (target_session.name or "") .. "'.", vim.log.levels.INFO)
-      if raw_state.active_session == target_session then
-        decorator.clear()
-        sidebar.hide()
-        raw_state.active_session = nil
+      local ok = sessions.delete(target_session, raw_state.sessions, root)
+      if not ok then
+        vim.notify("Unwind: Failed to delete session '" .. (target_session.name or "") .. "'.", vim.log.levels.ERROR)
+      else
+        vim.notify("Unwind: Deleted session '" .. (target_session.name or "") .. "'.", vim.log.levels.INFO)
+        if raw_state.active_session == target_session then
+          decorator.clear()
+          sidebar.hide()
+          raw_state.active_session = nil
+        end
       end
     end,
   })
@@ -839,32 +855,56 @@ function M.delete_frame_from_session(session, frame_idx)
   end
 
   local target_frame = session.frames[frame_idx]
+  local removed_raw_idx = nil
   for idx, f in ipairs(session.raw_frames) do
     if f == target_frame then
+      removed_raw_idx = idx
       table.remove(session.raw_frames, idx)
       break
     end
   end
 
   if session.saved then
-    sessions.save(session.root, raw_state.sessions)
+    local ok = sessions.save(session.root, raw_state.sessions)
+    if not ok then
+      if removed_raw_idx then
+        table.insert(session.raw_frames, removed_raw_idx, target_frame)
+      end
+      vim.notify("Unwind: Failed to persist frame deletion.", vim.log.levels.ERROR)
+      return
+    end
   end
 
   M.rebuild_derived(session)
+
+  local prev_active_frame = (session.active_index and session.active_index > 0) and session.frames[session.active_index] or nil
+  local is_active_frame_deleted = (target_frame == prev_active_frame)
 
   if #session.frames == 0 then
     session.active_index = 0
     session.active_file_index = 0
     decorator.clear()
+    sidebar.render(session)
   else
-    session.active_index = math.max(1, math.min(frame_idx, #session.frames))
-    local act_frame = session.frames[session.active_index]
-    if act_frame and act_frame.file_index then
-      session.active_file_index = act_frame.file_index
+    local new_index = nil
+    if not is_active_frame_deleted and prev_active_frame then
+      -- Find surviving index of previous active frame
+      for idx, f in ipairs(session.frames) do
+        if f == prev_active_frame then
+          new_index = idx
+          break
+        end
+      end
     end
-  end
 
-  sidebar.render(session)
+    if not new_index then
+      -- Target frame was active or could not be found: select nearest surviving frame
+      new_index = math.max(1, math.min(frame_idx, #session.frames))
+    end
+
+    sidebar.render(session)
+    M.jump_to_frame(new_index)
+  end
 end
 
 --- Re-check availability of all unique files in active session

@@ -43,7 +43,7 @@ There are zero external binary dependencies (no external CLI tools, no external 
   - Generic fallback (`([%w_%-./\\]+%.%w+):(%d+):?(%d*)`)
 - **Intelligent Path Normalization**: Automatically translates remote/container prefixes (e.g. `/app/`, `/var/task/`, `C:\workspace\`) to local files relative to `vim.fn.getcwd()`, and supports explicit `path_mappings`.
 - **Inline Virtual Line Telemetry**: Extended mark (`virt_lines`) decorations above fault lines with frame depth (`#depth/total`), method name (omitting noisy `anonymous()` placeholders), file, and line information.
-- **Vendor / Gem / Library Filtering**: Automatically flags or collapses non-workspace third-party library frames (e.g. `shared/bundle/ruby/...`, `/gems/`, `vendor/bundle/`, `node_modules/`, `/usr/lib/`).
+- **Vendor / Gem / Library Filtering**: Automatically tags non-workspace third-party library frames (e.g. `shared/bundle/ruby/...`, `/gems/`, `vendor/bundle/`, `node_modules/`, `/usr/lib/`), allowing toggleable filtering on demand.
 - **File vs. Frame Cycling**: Instant file-by-file navigation (`]f` / `[f`) alongside detailed frame-by-frame stepping (`]u` / `[u`).
 - **Quickfix Export**: Export all active stacktrace frames directly to Neovim's quickfix list with `:UnwindQuickfix`.
 
@@ -109,7 +109,7 @@ Crash traces frequently contain deep stack frames from external packages and ins
 
 `unwind.nvim` handles this seamlessly:
 1. **Filtering**: Toggle hiding external vendor traces on the fly with `:UnwindToggleFilter`. Surviving frame positions are preserved.
-2. **Workspace-Only by Default**: Enable `filter_out_of_project = true` in your setup configuration to hide vendor and out-of-workspace files automatically upon ingestion.
+2. **Workspace-Only Ingestion**: Set `filter_out_of_project = true` in your setup configuration to hide vendor and out-of-workspace files automatically upon ingestion (defaults to `false`).
 
 ---
 
