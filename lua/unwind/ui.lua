@@ -57,13 +57,16 @@ function M.close()
   active_buf = nil
   menu_source_win = nil
 
+  local cur_win = vim.api.nvim_get_current_win()
+  local should_restore = (win and cur_win == win)
+
   if win and vim.api.nvim_win_is_valid(win) then
     vim.api.nvim_win_close(win, true)
   end
   if buf and vim.api.nvim_buf_is_valid(buf) then
     pcall(vim.api.nvim_buf_delete, buf, { force = true })
   end
-  if src_win and vim.api.nvim_win_is_valid(src_win) and not M.is_floating(src_win) then
+  if should_restore and src_win and vim.api.nvim_win_is_valid(src_win) and not M.is_floating(src_win) then
     pcall(vim.api.nvim_set_current_win, src_win)
   end
 end
@@ -81,13 +84,16 @@ function M.close_input()
   input_buf = nil
   input_source_win = nil
 
+  local cur_win = vim.api.nvim_get_current_win()
+  local should_restore = (win and cur_win == win)
+
   if win and vim.api.nvim_win_is_valid(win) then
     vim.api.nvim_win_close(win, true)
   end
   if buf and vim.api.nvim_buf_is_valid(buf) then
     pcall(vim.api.nvim_buf_delete, buf, { force = true })
   end
-  if src_win and vim.api.nvim_win_is_valid(src_win) and not M.is_floating(src_win) then
+  if should_restore and src_win and vim.api.nvim_win_is_valid(src_win) and not M.is_floating(src_win) then
     pcall(vim.api.nvim_set_current_win, src_win)
   end
 end
@@ -126,10 +132,13 @@ function M.open(files, on_select)
   vim.bo[buf].swapfile = false
   vim.bo[buf].buflisted = false
 
+  local strwidth = vim.api.nvim_strwidth or function(s) return #s end
+
   local max_file_len = 0
   for _, item in ipairs(files) do
-    if #item.file > max_file_len then
-      max_file_len = #item.file
+    local w = strwidth(item.file or "")
+    if w > max_file_len then
+      max_file_len = w
     end
   end
 
@@ -142,7 +151,7 @@ function M.open(files, on_select)
   local col = math.max(0, math.floor((editor_width - win_width) / 2))
 
   -- Format lines: "1. src/services/checkout.lua                (2 frames)"
-  -- Compute padding against win_width - 2 so suffix does not wrap onto a second line
+  -- Compute display width padding against win_width - 2 so suffix does not wrap onto a second line
   local lines = {}
   for idx, item in ipairs(files) do
     local prefix = string.format("%d. %s", idx, item.file)
@@ -151,12 +160,23 @@ function M.open(files, on_select)
       frame_suffix = frame_suffix .. " [vendor]"
     end
 
-    local max_prefix = (win_width - 2) - #frame_suffix - 3
-    if #prefix > max_prefix and max_prefix > 8 then
-      prefix = prefix:sub(1, max_prefix - 3) .. "..."
+    local suffix_width = strwidth(frame_suffix)
+    local max_prefix_width = (win_width - 2) - suffix_width - 3
+    local prefix_width = strwidth(prefix)
+
+    if prefix_width > max_prefix_width and max_prefix_width > 8 then
+      -- Truncate string respecting character boundaries / display width
+      local truncated = prefix
+      while strwidth(truncated .. "...") > max_prefix_width and #truncated > 0 do
+        -- Truncate by one UTF-8 byte or char
+        local last_byte = truncated:sub(-1)
+        truncated = truncated:sub(1, -2)
+      end
+      prefix = truncated .. "..."
+      prefix_width = strwidth(prefix)
     end
 
-    local padding_len = math.max(2, (win_width - 2) - #prefix - #frame_suffix)
+    local padding_len = math.max(2, (win_width - 2) - prefix_width - suffix_width)
     local line_str = prefix .. string.rep(" ", padding_len) .. frame_suffix
     table.insert(lines, line_str)
   end

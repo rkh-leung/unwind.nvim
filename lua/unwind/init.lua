@@ -42,7 +42,6 @@ M.config = {
   },
 }
 
---- Track keymaps installed by setup so repeated setup calls clean up old ones
 --- Track keymaps installed by Unwind so subsequent setup() calls clean up old ones
 M._installed_keymaps = {}
 
@@ -340,11 +339,15 @@ function M.prev()
   vim.notify("Unwind: None of the stacktrace frames could be opened.", vim.log.levels.WARN)
 end
 
---- Re-apply collection and update state with current filter setting
+--- Re-apply collection and update state with current filter setting,
+--- preserving active navigation context when possible.
 function M.reapply_filter()
   if not M.state.raw_frames or #M.state.raw_frames == 0 then
     return
   end
+
+  local prev_frame = (M.state.active_index and M.state.active_index > 0) and M.state.frames[M.state.active_index] or nil
+  local prev_idx = M.state.active_index or 0
 
   local collected = collector.collect(M.state.raw_frames, {
     filter_vendor = M.state.filter_enabled,
@@ -353,8 +356,41 @@ function M.reapply_filter()
 
   M.state.frames = collected.frames
   M.state.files = collected.files
-  M.state.active_index = 0
-  M.state.active_file_index = 0
+
+  if #M.state.frames == 0 then
+    M.state.active_index = 0
+    M.state.active_file_index = 0
+    return
+  end
+
+  local new_active_index = nil
+
+  -- 1. Try to find the exact same frame object or identical frame identity in the new frames list
+  if prev_frame then
+    for idx, f in ipairs(M.state.frames) do
+      if f == prev_frame or (f.resolved_path == prev_frame.resolved_path and f.line == prev_frame.line and f.col == prev_frame.col and f.method == prev_frame.method) then
+        new_active_index = idx
+        break
+      end
+    end
+  end
+
+  -- 2. If not found, fall back to the nearest surviving frame (closest to prev_idx)
+  if not new_active_index then
+    if prev_idx > 0 then
+      new_active_index = math.max(1, math.min(prev_idx, #M.state.frames))
+    else
+      new_active_index = 1
+    end
+  end
+
+  M.state.active_index = new_active_index
+  local active_frame = M.state.frames[new_active_index]
+  if active_frame and active_frame.file_index and M.state.files[active_frame.file_index] then
+    M.state.active_file_index = active_frame.file_index
+  else
+    M.state.active_file_index = 1
+  end
 end
 
 --- Toggle vendor / library filtering
@@ -376,7 +412,10 @@ function M.toggle_filter()
   local status = M.state.filter_enabled and "enabled (hiding vendor/library files)" or "disabled (showing all files)"
   vim.notify(string.format("Unwind: Vendor filter %s (%d frames, %d files).", status, #M.state.frames, #M.state.files), vim.log.levels.INFO)
 
-  M.jump_to_frame(1)
+  local target = M.state.active_index > 0 and M.state.active_index or 1
+  if not M.jump_to_frame(target) then
+    M.next()
+  end
 end
 
 --- Ingest a raw plain-text stacktrace string

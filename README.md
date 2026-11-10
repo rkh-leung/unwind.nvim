@@ -1,16 +1,35 @@
 # unwind.nvim
 
-A high-performance, standalone Neovim plugin written entirely in native Lua (targeting Neovim >= 0.10).
+A lightweight, high-performance stacktrace navigation plugin written entirely in native Lua (targeting Neovim >= 0.10).
 
-`unwind.nvim` ingests plain-text crash stacktraces directly from the system clipboard or active buffers (handling Raygun traces, compiler errors, Rust panics, Node.js/V8 traces, Python tracebacks, Ruby backtraces, and generic call frames). It parses the text in memory using pure Lua pattern matching, deduplicates the referenced files into a Harpoon-style fast-switching modal menu showing only unique files, and projects inline call-stack telemetry into source buffers using Neovim's extended marks (`virt_lines`) API.
+`unwind.nvim` turns plain-text crash stacktraces directly into navigable Neovim source locations. It handles Raygun traces, compiler errors, Rust panics, Node.js/V8 traces, Python tracebacks, Ruby backtraces, and generic call frames. Traces are parsed entirely in-memory using pure Lua pattern matching, deduplicated into a Harpoon-style fast-switching modal menu showing unique implicated files, and projected as inline call-stack telemetry into source buffers using Neovim's extended marks (`virt_lines`) API.
 
-There are zero external binary dependencies (no Rust CLI, no external JSON parsing, no external RPC processes). Everything executes in-process via LuaJIT with sub-millisecond response times.
+There are zero external binary dependencies (no external CLI tools, no external JSON parsers, no RPC processes). All parsing and buffer navigation run entirely in-process within Neovim.
+
+---
+
+## Quick Start
+
+1. Install with your plugin manager (e.g. `lazy.nvim`):
+```lua
+{
+  "rkh-leung/unwind.nvim",
+  config = function()
+    require("unwind").setup()
+  end,
+}
+```
+
+2. Open Neovim in your project root (`cd /path/to/project && nvim .`).
+3. Copy a crash stacktrace to your system clipboard.
+4. Press `<leader>c` (or run `:UnwindClipboard`).
+5. `unwind.nvim` automatically jumps to the primary fault location with an inline error overlay. Cycle frames with `]u` / `[u`, cycle distinct files with `]f` / `[f`, or press `<leader>w` to open the file selection menu.
 
 ---
 
 ## Features
 
-- **Pure Lua In-Memory Parsing**: Zero external CLI processes or regex libraries. Instantaneous parsing of 100+ line stacktraces.
+- **Pure Lua In-Memory Parsing**: Zero external CLI processes or regex libraries. Ingests and parses 100+ line stacktraces in-process via native LuaJIT.
 - **Multi-Language Support**:
   - Raygun / .NET / Java (`at Namespace.Class.Method(...) in /path/to/file.cs:line 123` or `at Class.Method(File.java:123)`)
   - Rust / Cargo / Compiler (`--> src/main.rs:45:12` or `at /path/to/main.rs:45`)
@@ -18,11 +37,12 @@ There are zero external binary dependencies (no Rust CLI, no external JSON parsi
   - Python (`File "/path/to/file.py", line 45, in method_name`)
   - Ruby (`from /path/to/file.rb:12:in 'method_name'` or `/path/to/file.rb:12:in \`method_name\``)
   - Generic fallback (`([%w_%-./\\]+%.%w+):(%d+):?(%d*)`)
-- **Intelligent Path Normalization**: Automatically strips container and virtual prefixes (e.g. `/app/`, `/var/task/`, `C:\workspace\`) to map to local files relative to `vim.fn.getcwd()`.
-- **Harpoon-Style Floating Menu**: Centered floating scratch window listing distinct files in occurrence order with frame counts, quick jump (`<CR>`, `1`–`9`), and wipeout on exit.
+- **Intelligent Path Normalization**: Automatically translates remote/container prefixes (e.g. `/app/`, `/var/task/`, `C:\workspace\`) to local files relative to `vim.fn.getcwd()`, and supports explicit `path_mappings`.
+- **Harpoon-Style Floating Menu**: Centered floating scratch window listing distinct files in occurrence order with frame counts, quick jump (`<CR>`, `1`–`9`), multibyte-aware layout, and clean wipeout on exit.
 - **Inline Virtual Line Telemetry**: Extended mark (`virt_lines`) decorations above fault lines with frame depth (`#depth/total`), method name (omitting noisy `anonymous()` placeholders), file, and line information.
 - **Vendor / Gem / Library Filtering**: Automatically flags or collapses non-workspace third-party library frames (e.g. `shared/bundle/ruby/...`, `/gems/`, `vendor/bundle/`, `node_modules/`, `/usr/lib/`).
 - **File vs. Frame Cycling**: Instant file-by-file navigation (`]f` / `[f`) alongside detailed frame-by-frame stepping (`]u` / `[u`).
+- **Quickfix Export**: Export all parsed stacktrace frames directly to Neovim's quickfix list with `:UnwindQuickfix`.
 
 ---
 
@@ -32,7 +52,7 @@ Crash traces frequently contain deep stack frames from external packages and ins
 
 `unwind.nvim` handles this seamlessly:
 1. **Visual Tagging**: The floating menu (`<leader>w`) identifies and tags external paths with `[vendor]`.
-2. **Filtering**: You can toggle hiding external vendor traces on the fly with `:UnwindToggleFilter`.
+2. **Filtering**: You can toggle hiding external vendor traces on the fly with `:UnwindToggleFilter`. Navigation context is preserved: if the currently inspected frame survives filtering, focus remains on it; otherwise, navigation falls back to the nearest surviving frame.
 3. **Workspace-Only by Default**: Enable `filter_out_of_project = true` in your setup configuration to hide vendor and out-of-workspace files automatically upon ingestion, keeping only your project's codebase files in view.
 
 ---
@@ -50,7 +70,7 @@ cd /path/to/my-project
 nvim .
 ```
 
-Running `nvim .` ensures Neovim's current working directory (`vim.fn.getcwd()`) points to your codebase. `unwind.nvim` uses this working directory to automatically strip container and build prefixes (e.g. `/app/`, `/var/task/`, `C:\workspace\`) and resolve files in the stacktrace to local project files.
+Running `nvim .` ensures Neovim's current working directory (`vim.fn.getcwd()`) points to your codebase. `unwind.nvim` pins this root on ingestion to translate container and build prefixes (e.g. `/app/`, `/var/task/`, `C:\workspace\`) to local project files, remaining invariant across buffer `:cd` changes.
 
 ### 2. Provide the stacktrace
 
@@ -89,9 +109,25 @@ Once ingested:
   - Press `<CR>` to jump to the selected file at its primary fault line.
   - Press `q` or `<Esc>` to dismiss the menu.
 - **Filter Vendor/Third-Party Traces**:
-  - Run `:UnwindToggleFilter` to toggle hiding/showing external vendor/library frames on demand.
+  - Run `:UnwindToggleFilter` to toggle hiding/showing external vendor/library frames on demand. Surviving frame positions are preserved.
+- **Quickfix Export**:
+  - Run `:UnwindQuickfix` to export active frames to Neovim's quickfix list (`copen`), allowing standard `:cnext` and `:cprev` navigation.
 - **Clear Overlays**:
   - Run `:UnwindClear` whenever you want to dismiss all active decorations and reset state.
+
+---
+
+## Path Resolution & Limitations
+
+When stacktraces originate from remote systems, Docker containers, or CI runners, file paths often do not match the local filesystem exactly.
+
+`unwind.nvim` resolves paths using the following priority:
+1. **Explicit `path_mappings`**: Exact prefix translations configured in `setup()`. This is always the most reliable and recommended method for container or remote CI environments (e.g. `["/app/"] = vim.fn.getcwd()`).
+2. **Direct Workspace Match**: Paths that exist directly on disk or as loaded buffers.
+3. **Known Container Prefix Stripping**: Heuristic stripping of common prefixes (`/app/`, `/var/task/`, Windows drive roots).
+4. **Iterative Suffix Matching**: Stripping leading path components progressively.
+
+> **Note on Heuristic Suffix Resolution**: Suffix-based resolution is heuristic. If a project contains identical relative paths across multiple directories or monorepo subprojects, suffix stripping may resolve to the first matching file. In ambiguous environments, configure explicit `path_mappings` in `setup()` for deterministic resolution. Frames that cannot be resolved to existing local files remain navigable in the menu and quickfix list, but opening nonexistent files is prevented to avoid creating empty buffers.
 
 ---
 
@@ -117,24 +153,11 @@ git clone https://github.com/rkh-leung/unwind.nvim.git ~/.local/share/nvim/site/
 -- If placed under pack/*/opt/unwind.nvim, load it with packadd:
 vim.cmd.packadd("unwind.nvim")
 
--- Optionally customize configuration (single-key leader keymaps are configured by default):
+-- Configure options:
 require("unwind").setup({
-  filter_out_of_project = false, -- Set to true to hide vendor/library frames by default
-  path_mappings = {},            -- Explicit remote-to-local path prefixes { ["/remote/app/"] = "./" }
-  ignore_patterns = {            -- Custom patterns to identify vendor paths
-    "shared/bundle/",
-    "vendor/bundle/",
-    "/gems/",
-    "node_modules/",
-    "^/usr/",
-  },
-  keymaps = {
-    menu = "<leader>w",      -- Open Harpoon-style distinct files menu (single key)
-    clipboard = "<leader>c", -- Ingest stacktrace from clipboard (+) (single key)
-    next = "]u",             -- Jump to next stack frame
-    prev = "[u",             -- Jump to previous stack frame
-    next_file = "]f",        -- Jump directly to next unique file
-    prev_file = "[f",        -- Jump directly to previous unique file
+  filter_out_of_project = false,
+  path_mappings = {
+    ["/app"] = vim.fn.getcwd(),
   },
 })
 ```
@@ -146,16 +169,60 @@ require("unwind").setup({
   "rkh-leung/unwind.nvim",
   config = function()
     require("unwind").setup({
+      filter_out_of_project = false,
+      path_mappings = {
+        ["/app"] = vim.fn.getcwd(),
+      },
       keymaps = {
         menu = "<leader>w",      -- Open Harpoon-style distinct files menu (single key)
         clipboard = "<leader>c", -- Ingest stacktrace from clipboard (+) (single key)
         next = "]u",             -- Jump to next stack frame
         prev = "[u",             -- Jump to previous stack frame
+        next_file = "]f",        -- Jump directly to next unique file
+        prev_file = "[f",        -- Jump directly to previous unique file
       },
     })
   end,
 }
 ```
+
+---
+
+## Configuration Reference
+
+The following table details every supported option in `require("unwind").setup(opts)`:
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `filter_out_of_project` | `boolean` | `false` | When `true`, automatically filters out vendor and external paths upon ingestion. |
+| `path_mappings` | `table<string, string>` | `{}` | Key-value table mapping remote/container directory prefixes to local paths (e.g. `{ ["/app/"] = "./" }`). Evaluated longest prefix first. |
+| `max_input_bytes` | `number` | `2097152` (2 MiB) | Maximum size in bytes of stacktrace text ingested from file or buffer before truncating. |
+| `max_frames` | `number` | `1000` | Maximum number of stack frames retained in memory. For Python tracebacks, the innermost (last N) crash frames are preserved. |
+| `ignore_patterns` | `string[]` | `{"shared/bundle/", "vendor/bundle/", "/gems/", "node_modules/", "^/usr/"}` | Lua patterns used to classify frames as external vendor or third-party code. |
+| `keymaps` | `table\|false` | See table below | Keymap table for default normal mode bindings, or `false` to disable automatic keybinding registration. |
+| `force_keymaps` | `boolean` | `false` | When `true`, overrides existing non-Unwind keymaps during setup. By default, Unwind respects user mappings and only overrides mappings it owns. |
+
+### Default Keybindings
+
+All leader keymaps follow single-key mappings:
+
+| Action | Command | Default Keymap | Description |
+|---|---|---|---|
+| Toggle Menu | `:UnwindMenu` | `<leader>w` | Open Harpoon-style distinct files menu |
+| Ingest Clipboard | `:UnwindClipboard` | `<leader>c` | Ingest stacktrace from system clipboard (`+`) |
+| Next Frame | `:UnwindNext` | `]u` | Jump to next stack frame |
+| Previous Frame | `:UnwindPrev` | `[u` | Jump to previous stack frame |
+| Next File | `:UnwindNextFile` | `]f` | Jump directly to next unique file |
+| Previous File | `:UnwindPrevFile` | `[f` | Jump directly to previous unique file |
+| Toggle Filter | `:UnwindToggleFilter` | - | Toggle hiding/showing vendor & external frames |
+| Quickfix Export | `:UnwindQuickfix` | - | Export stack frames to Neovim's quickfix list |
+| Clear Telemetry | `:UnwindClear` | - | Clear active decorations, highlights, and state |
+
+Inside the floating file menu:
+- `<CR>` -> Jump to selected file at primary fault line
+- `1` through `9` -> Jump directly to slot index 1–9
+- `q` / `<Esc>` -> Dismiss and wipe menu window
+- `j` / `k` -> Navigate rows
 
 ---
 
@@ -179,29 +246,11 @@ require("unwind").setup({
 
 ---
 
-## Default Keybindings
-
-All leader keymaps use a single key after `<leader>`:
-
-- `<leader>w` -> Toggle file menu
-- `<leader>c` -> Ingest from clipboard
-- `]u` -> Next stack frame
-- `[u` -> Previous stack frame
-- `]f` -> Next unique file
-- `[f` -> Previous unique file
-
-Inside the floating file menu:
-- `<CR>` -> Jump to selected file at primary fault line
-- `1` through `9` -> Jump directly to slot index 1–9
-- `q` / `<Esc>` -> Dismiss and wipe menu window
-- `j` / `k` -> Navigate list
-
----
-
 ## Running Tests
 
-Run the test suite using Neovim headless:
+Run the headless test suite:
 
 ```bash
 nvim --headless -u NONE -c "luafile tests/parser_spec.lua" -c "qa!"
+nvim --headless -u NONE -c "luafile tests/leak_spec.lua" -c "qa!"
 ```

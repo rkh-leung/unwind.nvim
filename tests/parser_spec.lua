@@ -908,4 +908,81 @@ do
   assert_eq(res.files[1].total_frames, 2, "total frames count is 2")
 end
 
+print("--> [New Review Tests] Preserving navigation context during filter toggle...")
+do
+  local mixed_trace = [[
+core/app/feed.rb:10:in `render'
+/apps/myapp/shared/bundle/ruby/3.3.0/gems/activesupport/callbacks.rb:27:in `run'
+app/models/brand.rb:5:in `name'
+]]
+  unwind.clear()
+  unwind.ingest(mixed_trace)
+  assert_eq(#unwind.state.frames, 3, "3 raw frames")
+
+  -- Set active_index to frame 3 (brand.rb, a non-vendor frame)
+  unwind.state.active_index = 3
+
+  -- Reapply filter to hide vendor frames
+  unwind.state.filter_enabled = true
+  unwind.reapply_filter()
+
+  -- brand.rb is non-vendor, so it should still be present in filtered frames
+  assert_eq(#unwind.state.frames, 2, "2 frames after filtering vendor")
+  assert_eq(unwind.state.frames[unwind.state.active_index].file, "app/models/brand.rb", "active frame context preserved")
+
+  -- Now test fallback when active frame IS vendor
+  unwind.state.filter_enabled = false
+  unwind.reapply_filter()
+  assert_eq(#unwind.state.frames, 3, "3 frames when filter disabled")
+  -- Select frame 2 (activesupport, which is vendor)
+  unwind.state.active_index = 2
+
+  unwind.state.filter_enabled = true
+  unwind.reapply_filter()
+  assert_eq(#unwind.state.frames, 2, "2 frames after filter")
+  -- Nearest surviving frame to index 2 is index 2 (brand.rb)
+  assert_true(unwind.state.active_index > 0 and unwind.state.active_index <= #unwind.state.frames, "active_index falls back cleanly")
+  unwind.clear()
+end
+
+print("--> [New Review Tests] Multibyte string display width in floating menu...")
+do
+  local multibyte_files = {
+    { file = "src/日本語/サービス.lua", total_frames = 2, is_vendor = false },
+    { file = "src/emoji_🚀_test.lua", total_frames = 1, is_vendor = true },
+  }
+  -- Should open and close without throwing any error
+  ui.open(multibyte_files, function() end)
+  assert_true(ui.is_floating(), "menu window is open and floating")
+  ui.close()
+  assert_true(not ui.is_floating(), "menu window is closed")
+end
+
+print("--> [New Review Tests] ui.close() does not steal focus when user moved to another window...")
+do
+  local test_buf1 = vim.api.nvim_create_buf(false, true)
+  local test_buf2 = vim.api.nvim_create_buf(false, true)
+  local win1 = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(win1, test_buf1)
+
+  -- Open floating menu
+  ui.open({ { file = "dummy.lua", total_frames = 1, is_vendor = false } }, function() end)
+
+  -- Create a second normal window and move focus to it while float is open
+  vim.cmd("vsplit")
+  local win2 = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(win2, test_buf2)
+
+  -- Current window is win2, not the float. Now close float.
+  ui.close()
+
+  -- Focus should stay in win2, not forced back to win1
+  assert_eq(vim.api.nvim_get_current_win(), win2, "focus remained in win2 after ui.close()")
+
+  -- Cleanup
+  vim.api.nvim_win_close(win2, true)
+  pcall(vim.api.nvim_buf_delete, test_buf1, { force = true })
+  pcall(vim.api.nvim_buf_delete, test_buf2, { force = true })
+end
+
 print("All parser, collector & integration unit tests PASSED successfully!")
