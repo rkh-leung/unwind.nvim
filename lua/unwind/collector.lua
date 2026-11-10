@@ -23,25 +23,68 @@ function M.is_vendor_or_ignored(fpath, ignore_patterns, root)
   }
 
   for _, pattern in ipairs(patterns) do
-    if fpath:find(pattern) then
+    local ok, matched = pcall(string.find, fpath, pattern)
+    if ok and matched then
       return true
     end
   end
 
-  -- Check if path is absolute and outside root
-  if fpath:sub(1, 1) == "/" or fpath:match("^%a:[/\\]") then
-    local workspace_root = vim.fs.normalize(root or vim.fn.getcwd())
-    local norm = vim.fs.normalize(fpath)
+  -- Resolve absolute path against workspace root
+  local workspace_root = vim.fs.normalize(root or vim.fn.getcwd())
+  local is_windows = vim.fn.has("win32") == 1 or fpath:match("^%a:[/\\]") or workspace_root:match("^%a:[/\\]")
 
-    local is_windows = vim.fn.has("win32") == 1 or norm:match("^%a:[/\\]") or workspace_root:match("^%a:[/\\]")
-    local check_root = is_windows and workspace_root:lower() or workspace_root
-    local check_norm = is_windows and norm:lower() or norm
+  -- Canonicalize lexical path (resolving .. and .)
+  local p = fpath:gsub("\\", "/")
+  local is_abs_unix = p:sub(1, 1) == "/"
+  local drive, rest = p:match("^([%a]:)/(.*)")
+  if drive then
+    p = "/" .. rest
+  end
 
-    -- Proper boundary check: must either be exact root or have root followed by path separator '/'
-    local is_in_workspace = (check_norm == check_root) or vim.startswith(check_norm, check_root .. "/")
-    if not is_in_workspace then
-      return true
+  local parts = {}
+  if not is_abs_unix and not drive then
+    -- Prepend workspace_root components
+    local ws = workspace_root:gsub("\\", "/")
+    local ws_drive, ws_rest = ws:match("^([%a]:)/(.*)")
+    if ws_drive then
+      drive = ws_drive
+      ws = "/" .. ws_rest
+    elseif ws:sub(1, 1) == "/" then
+      is_abs_unix = true
     end
+    for part in ws:gmatch("[^/]+") do
+      table.insert(parts, part)
+    end
+  end
+
+  for part in p:gmatch("[^/]+") do
+    if part == "." then
+      -- skip
+    elseif part == ".." then
+      if #parts > 0 and parts[#parts] ~= ".." then
+        table.remove(parts)
+      elseif not is_abs_unix and not drive then
+        table.insert(parts, "..")
+      end
+    else
+      table.insert(parts, part)
+    end
+  end
+
+  local norm = table.concat(parts, "/")
+  if drive then
+    norm = drive .. "/" .. norm
+  elseif is_abs_unix then
+    norm = "/" .. norm
+  end
+
+  local check_root = is_windows and workspace_root:lower() or workspace_root
+  local check_norm = is_windows and norm:lower() or norm
+
+  -- Proper boundary check: must either be exact root or have root followed by path separator '/'
+  local is_in_workspace = (check_norm == check_root) or vim.startswith(check_norm, check_root .. "/")
+  if not is_in_workspace then
+    return true
   end
 
   return false
@@ -53,8 +96,8 @@ end
 --- Stores cross-indexes (frame.file_index, file.primary_frame_index) for O(1) lookups.
 --- Supports filtering out vendor / third-party / ignored library frames.
 ---@param frames table[] List of frame objects { file, resolved_path, navigable, line, col, method, raw_line }
----@param opts? { root?: string, filter_vendor?: boolean, ignore_patterns?: string[], only_workspace_files?: boolean }
----@return { files: table[], frames: table[], all_filtered?: boolean }
+---@param opts? { root?: string, filter_vendor?: boolean, ignore_patterns?: string[] }
+---@return { files: table[], frames: table[] }
 function M.collect(frames, opts)
   opts = opts or {}
   local filter_vendor = opts.filter_vendor or false

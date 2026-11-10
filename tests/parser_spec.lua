@@ -985,4 +985,35 @@ do
   pcall(vim.api.nvim_buf_delete, test_buf2, { force = true })
 end
 
+print("--> [New Review Tests] Relative paths outside workspace (../outside/foo.lua) treated as vendor/external...")
+do
+  assert_true(collector.is_vendor_or_ignored("../outside/project/foo.lua"), "relative path ascending out of workspace must be vendor")
+  assert_true(not collector.is_vendor_or_ignored("src/local/foo.lua"), "local relative path must not be vendor")
+end
+
+print("--> [New Review Tests] Malformed ignore patterns do not crash collection or setup...")
+do
+  -- Protected pattern evaluation in is_vendor_or_ignored
+  local malformed_ok = pcall(function()
+    collector.is_vendor_or_ignored("some/path/file.lua", { "[malformed(" })
+  end)
+  assert_true(malformed_ok, "is_vendor_or_ignored should handle malformed patterns safely without crashing")
+
+  -- Validation in setup()
+  unwind.setup({ ignore_patterns = { "[invalid(", "valid_pattern/" } })
+  assert_eq(#unwind.config.ignore_patterns, 1, "setup should discard invalid patterns")
+  assert_eq(unwind.config.ignore_patterns[1], "valid_pattern/", "valid pattern kept")
+
+  -- Restore default ignore patterns
+  unwind.setup({
+    ignore_patterns = {
+      "shared/bundle/",
+      "vendor/bundle/",
+      "/gems/",
+      "node_modules/",
+      "^/usr/",
+    },
+  })
+end
+
 print("All parser, collector & integration unit tests PASSED successfully!")
