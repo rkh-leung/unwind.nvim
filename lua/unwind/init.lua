@@ -89,7 +89,18 @@ function M.setup(opts)
   -- Clone opts shallowly so we never mutate caller's options table
   local user_opts = opts and vim.tbl_extend("force", {}, opts) or {}
   if user_opts.ignore_patterns then
-    M.config.ignore_patterns = user_opts.ignore_patterns
+    local valid_patterns = {}
+    for _, pat in ipairs(user_opts.ignore_patterns) do
+      if type(pat) == "string" then
+        local ok, _ = pcall(string.find, "", pat)
+        if ok then
+          table.insert(valid_patterns, pat)
+        else
+          vim.notify("Unwind: Invalid ignore pattern discarded: " .. tostring(pat), vim.log.levels.WARN)
+        end
+      end
+    end
+    M.config.ignore_patterns = valid_patterns
     user_opts.ignore_patterns = nil
   end
   if user_opts.keymaps == false then
