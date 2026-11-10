@@ -42,7 +42,6 @@ M.config = {
   },
 }
 
---- Track keymaps installed by setup so repeated setup calls clean up old ones
 --- Track keymaps installed by Unwind so subsequent setup() calls clean up old ones
 M._installed_keymaps = {}
 
@@ -340,7 +339,6 @@ function M.prev()
   vim.notify("Unwind: None of the stacktrace frames could be opened.", vim.log.levels.WARN)
 end
 
---- Re-apply collection and update state with current filter setting
 --- Re-apply collection and update state with current filter setting,
 --- preserving active navigation context when possible.
 function M.reapply_filter()

@@ -63,7 +63,6 @@ vim.api.nvim_create_user_command("UnwindClear", function()
   require("unwind").clear()
 end, { desc = "Clear active decorations and state" })
 
--- Default keybindings using inline lazy wrappers (preserving lazy loading)
 -- Default keybindings using centralized installer with ownership tracking
 -- Only maps if not already mapped, and records ownership in unwind
 require("unwind").install_keymaps(require("unwind").config.keymaps, true)
