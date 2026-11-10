@@ -554,6 +554,33 @@ function M.toggle_filter()
 end
 
 --- Activate a specific session
+--- Wire default callbacks for a session to sidebar
+---@param session table
+---@return table callbacks
+local function get_sidebar_callbacks(session)
+  return {
+    on_select_frame = function(f_idx)
+      M.jump_to_frame(f_idx)
+    end,
+    on_delete_frame = function(f_idx)
+      M.delete_frame_from_session(session, f_idx)
+    end,
+    on_move_frame = function(from_idx, to_idx)
+      M.move_frame_in_session(session, from_idx, to_idx)
+    end,
+    on_replace_frame = function(f_idx)
+      M.replace_frame_in_session(session, f_idx)
+    end,
+    on_save = function()
+      M.prompt_save_session(session)
+    end,
+    on_refresh = function()
+      M.refresh_availability()
+    end,
+  }
+end
+
+--- Activate a specific session
 ---@param session table
 function M.activate_session(session)
   if not session then return end
@@ -562,29 +589,30 @@ function M.activate_session(session)
   M.rebuild_derived(session)
 
   -- Open/reuse right sidebar
-  sidebar.open(session, {
-    on_select_frame = function(f_idx)
-      M.jump_to_frame(f_idx)
-    end,
-    on_delete_frame = function(f_idx)
-      M.delete_frame_from_session(session, f_idx)
-    end,
-    on_refresh = function()
-      M.refresh_availability()
-    end,
-  })
+  sidebar.open(session, get_sidebar_callbacks(session))
 
-  local target = (session.active_index and session.active_index > 0) and session.active_index or 1
-  M.jump_to_frame(target)
+  local events = require("unwind.events")
+  events.emit("session_activated", session)
+
+  if session.frames and #session.frames > 0 then
+    local target = (session.active_index and session.active_index > 0) and session.active_index or 1
+    M.jump_to_frame(target)
+  else
+    session.active_index = 0
+    session.active_file_index = 0
+    decorator.clear()
+    sidebar.render(session)
+  end
 end
 
 --- Ingest a raw plain-text stacktrace string
 --- Creates a new unsaved working session and leaves saved sessions untouched
 ---@param text string
+---@return table|nil session
 function M.ingest(text)
   if not text or text == "" then
     vim.notify("Unwind: Ingested text is empty.", vim.log.levels.WARN)
-    return
+    return nil
   end
 
   local max_bytes = M.config.max_input_bytes or (2 * 1024 * 1024)
@@ -603,11 +631,17 @@ function M.ingest(text)
   })
   if #frames == 0 then
     vim.notify("Unwind: No stack frames recognized in input.", vim.log.levels.WARN)
-    return
+    return nil
   end
 
   local filter_enabled = M.config.filter_out_of_project or false
-  local session = sessions.new_working(root, frames, filter_enabled)
+  local session = sessions.create({
+    root = root,
+    frames = frames,
+    filter_enabled = filter_enabled,
+    transient = true,
+    name = nil,
+  })
   raw_state.active_session = session
 
   M.rebuild_derived(session)
@@ -615,7 +649,7 @@ function M.ingest(text)
 
   if #session.frames == 0 then
     vim.notify("Unwind: All recognized frames were filtered out as vendor/external files.", vim.log.levels.WARN)
-    return
+    return session
   end
 
   vim.notify(string.format("Unwind: Loaded %d frames across %d files.", #session.frames, #session.files), vim.log.levels.INFO)
@@ -627,16 +661,56 @@ function M.ingest(text)
 
   -- Jump to first frame
   M.jump_to_frame(1)
+  return session
 end
 
 --- Ingest stacktrace from clipboard register '+'
+--- Always creates a NEW unnamed transient session rather than mutating active session.
+---@return table|nil session
 function M.ingest_clipboard()
   local text = vim.fn.getreg("+")
   if not text or text == "" then
     vim.notify("Unwind: Clipboard (+) is empty.", vim.log.levels.WARN)
-    return
+    return nil
   end
-  M.ingest(text)
+
+  local max_bytes = M.config.max_input_bytes or (2 * 1024 * 1024)
+  if #text > max_bytes then
+    vim.notify(string.format("Unwind: Ingested text exceeds maximum limit (%d bytes), truncating.", max_bytes), vim.log.levels.WARN)
+    text = text:sub(1, max_bytes)
+  end
+
+  local root = vim.fs.normalize(vim.fn.getcwd())
+  raw_state.root = root
+
+  local frames = parser.parse(text, {
+    root = root,
+    path_mappings = M.config.path_mappings,
+    max_frames = M.config.max_frames,
+  })
+  if #frames == 0 then
+    vim.notify("Unwind: No stack frames recognized in clipboard.", vim.log.levels.WARN)
+    return nil
+  end
+
+  -- Create a brand new unnamed transient session
+  local session = sessions.create({
+    root = root,
+    name = nil,
+    transient = true,
+    filter_enabled = M.config.filter_out_of_project or false,
+  })
+  sessions.add_frames(session, frames)
+
+  -- Activate session and open sidebar
+  M.activate_session(session)
+  sidebar.open(session, get_sidebar_callbacks(session))
+
+  if #session.frames > 0 then
+    M.jump_to_frame(1)
+  end
+
+  return session
 end
 
 --- Ingest stacktrace from a 1-indexed line range
@@ -752,44 +826,142 @@ function M.unwind(arg)
   end
 end
 
+--- Create a new empty untitled session and open sidebar
+---@return table session
+function M.new_session()
+  local root = raw_state.root or vim.fs.normalize(vim.fn.getcwd())
+  local session = sessions.create({
+    root = root,
+    name = nil,
+    transient = true,
+  })
+  M.activate_session(session)
+  return session
+end
+
+--- Add the current source location to the active debugging session.
+--- If no active session exists, creates an unnamed transient session.
+function M.add_current_location()
+  -- If currently inside sidebar or floating window, switch to source window first
+  ui.ensure_source_window()
+  sidebar.ensure_source_window()
+
+  local bufnr = vim.api.nvim_get_current_buf()
+  local bufname = vim.api.nvim_buf_get_name(bufnr)
+
+  if not bufname or bufname == "" or vim.bo[bufnr].buftype ~= "" then
+    vim.notify("Unwind: Cannot add frame from unnamed or non-file buffer.", vim.log.levels.WARN)
+    return
+  end
+
+  local root = raw_state.root or vim.fs.normalize(vim.fn.getcwd())
+  raw_state.root = root
+
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  local row = cursor[1]
+  local col = cursor[2] + 1 -- 1-indexed column
+
+  -- Check if location resolver is available (Tree-sitter)
+  local ok_loc, location = pcall(require, "unwind.location")
+  local frame_data = nil
+  if ok_loc and location and location.from_cursor then
+    frame_data = location.from_cursor({
+      bufnr = bufnr,
+      row = row,
+      col = col,
+      root = root,
+    })
+  end
+
+  if not frame_data then
+    local rel_path = bufname
+    if vim.startswith(bufname, root .. "/") then
+      rel_path = bufname:sub(#root + 2)
+    end
+    frame_data = {
+      path = bufname,
+      file = rel_path,
+      line = row,
+      col = col,
+      column = col,
+      method = nil,
+      origin = "manual",
+      raw_line = string.format("%s:%d:%d", rel_path, row, col),
+    }
+  end
+
+  local session = raw_state.active_session
+  if not session then
+    session = sessions.create({
+      root = root,
+      name = nil,
+      transient = true,
+      filter_enabled = M.config.filter_out_of_project or false,
+    })
+    raw_state.active_session = session
+  end
+
+  sessions.add_frame(session, frame_data, nil, raw_state.sessions)
+  M.rebuild_derived(session)
+
+  if not sidebar.is_open() then
+    sidebar.open(session, get_sidebar_callbacks(session))
+  else
+    sidebar.render(session)
+  end
+
+  session.active_index = #session.frames
+  M.jump_to_frame(#session.frames)
+  vim.notify(string.format("Unwind: Added location %s:%d to session.", frame_data.file or frame_data.path, frame_data.line), vim.log.levels.INFO)
+end
+
 --- Toggle / Open session manager
 function M.menu()
   local root = raw_state.root or vim.fs.normalize(vim.fn.getcwd())
   M.ensure_sessions_loaded(root)
 
   local items = {}
+  table.insert(items, { type = "new_session" })
+  table.insert(items, { type = "import_clipboard" })
+  table.insert(items, { type = "blank" })
+
   local session = raw_state.active_session
-
-  -- If there is an unsaved working session, offer save action
-  if session and not session.saved and session.raw_frames and #session.raw_frames > 0 then
-    table.insert(items, { type = "save_action" })
-  end
-
-  for _, s in ipairs(raw_state.sessions) do
+  if session then
+    local count = session.raw_frames and #session.raw_frames or 0
     table.insert(items, {
-      type = "session",
-      name = s.name,
-      frame_count = s.raw_frames and #s.raw_frames or 0,
-      session = s,
+      type = "current_status",
+      name = session.name or "Untitled",
+      frame_count = count,
     })
+    if not session.saved then
+      table.insert(items, { type = "save_action" })
+    end
+    table.insert(items, { type = "blank" })
   end
 
-  if #items == 0 then
-    vim.notify("Unwind: No active trace or saved sessions.", vim.log.levels.INFO)
-    return
+  if #raw_state.sessions > 0 then
+    table.insert(items, { type = "separator", text = "Saved Sessions" })
+    for _, s in ipairs(raw_state.sessions) do
+      table.insert(items, {
+        type = "session",
+        name = s.name,
+        frame_count = s.raw_frames and #s.raw_frames or 0,
+        session = s,
+      })
+    end
   end
 
   ui.open_session_manager(items, {
+    on_new = function()
+      M.new_session()
+    end,
+    on_import_clipboard = function()
+      M.ingest_clipboard()
+    end,
     on_save = function()
-      ui.prompt_input("Session name", "", function(name)
-        local ok, err = sessions.save_working(session, name, raw_state.sessions, root)
-        if not ok then
-          vim.notify("Unwind: " .. tostring(err), vim.log.levels.ERROR)
-        else
-          vim.notify("Unwind: Saved session '" .. session.name .. "'.", vim.log.levels.INFO)
-          M.activate_session(session)
-        end
-      end)
+      if session then
+        M.prompt_save_session(session)
+      end
     end,
     on_select = function(selected_session)
       M.activate_session(selected_session)
@@ -846,6 +1018,115 @@ function M.toggle_sidebar()
   end
 end
 
+--- Move a frame in session (reorder up/down)
+---@param session table
+---@param from_idx number
+---@param to_idx number
+function M.move_frame_in_session(session, from_idx, to_idx)
+  if not session or not session.frames or not session.frames[from_idx] or not session.frames[to_idx] then
+    return
+  end
+  local target_frame = session.frames[from_idx]
+  local raw_from_idx = nil
+  for idx, f in ipairs(session.raw_frames) do
+    if f == target_frame then
+      raw_from_idx = idx
+      break
+    end
+  end
+
+  local dest_frame = session.frames[to_idx]
+  local raw_to_idx = nil
+  for idx, f in ipairs(session.raw_frames) do
+    if f == dest_frame then
+      raw_to_idx = idx
+      break
+    end
+  end
+
+  if raw_from_idx and raw_to_idx then
+    local ok = sessions.move_frame(session, raw_from_idx, raw_to_idx, raw_state.sessions)
+    if ok then
+      M.rebuild_derived(session)
+      session.active_index = to_idx
+      sidebar.render(session)
+      sidebar.set_active(session, to_idx)
+    end
+  end
+end
+
+--- Replace a frame in session with current source location
+---@param session table
+---@param frame_idx number
+function M.replace_frame_in_session(session, frame_idx)
+  if not session or not session.frames or not session.frames[frame_idx] then
+    return
+  end
+
+  ui.ensure_source_window()
+  sidebar.ensure_source_window()
+
+  local bufnr = vim.api.nvim_get_current_buf()
+  local bufname = vim.api.nvim_buf_get_name(bufnr)
+  if not bufname or bufname == "" or vim.bo[bufnr].buftype ~= "" then
+    vim.notify("Unwind: Cannot replace frame from unnamed or non-file buffer.", vim.log.levels.WARN)
+    return
+  end
+
+  local root = session.root or raw_state.root or vim.fs.normalize(vim.fn.getcwd())
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  local row = cursor[1]
+  local col = cursor[2] + 1
+
+  local ok_loc, location = pcall(require, "unwind.location")
+  local frame_data = nil
+  if ok_loc and location and location.from_cursor then
+    frame_data = location.from_cursor({
+      bufnr = bufnr,
+      row = row,
+      col = col,
+      root = root,
+    })
+  end
+
+  if not frame_data then
+    local rel_path = bufname
+    if vim.startswith(bufname, root .. "/") then
+      rel_path = bufname:sub(#root + 2)
+    end
+    frame_data = {
+      path = bufname,
+      file = rel_path,
+      line = row,
+      col = col,
+      column = col,
+      method = nil,
+      origin = "manual",
+      raw_line = string.format("%s:%d:%d", rel_path, row, col),
+    }
+  end
+
+  local target_frame = session.frames[frame_idx]
+  local raw_idx = nil
+  for idx, f in ipairs(session.raw_frames) do
+    if f == target_frame then
+      raw_idx = idx
+      break
+    end
+  end
+
+  if raw_idx then
+    local ok = sessions.update_frame(session, raw_idx, frame_data, raw_state.sessions)
+    if ok then
+      M.rebuild_derived(session)
+      session.active_index = frame_idx
+      sidebar.render(session)
+      M.jump_to_frame(frame_idx)
+      vim.notify(string.format("Unwind: Replaced frame %d with %s:%d.", frame_idx, frame_data.file, frame_data.line), vim.log.levels.INFO)
+    end
+  end
+end
+
 --- Remove a frame from a session
 ---@param session table
 ---@param frame_idx number
@@ -859,17 +1140,13 @@ function M.delete_frame_from_session(session, frame_idx)
   for idx, f in ipairs(session.raw_frames) do
     if f == target_frame then
       removed_raw_idx = idx
-      table.remove(session.raw_frames, idx)
       break
     end
   end
 
-  if session.saved then
-    local ok = sessions.save(session.root, raw_state.sessions)
+  if removed_raw_idx then
+    local ok = sessions.remove_frame(session, removed_raw_idx, raw_state.sessions)
     if not ok then
-      if removed_raw_idx then
-        table.insert(session.raw_frames, removed_raw_idx, target_frame)
-      end
       vim.notify("Unwind: Failed to persist frame deletion.", vim.log.levels.ERROR)
       return
     end

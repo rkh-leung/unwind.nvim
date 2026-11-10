@@ -31,12 +31,14 @@ This guide is designed for engineers who are working on `unwind.nvim`. We cover 
 ```text
 .
 ├── plugin/
-│   └── unwind.lua          # Auto-loaded entrypoint: user commands & default keymaps
+│   └── unwind.lua          # Auto-loaded entrypoint: user commands (:UnwindAdd, etc.) & default keymaps
 ├── lua/
 │   └── unwind/
 │       ├── init.lua        # Controller & orchestrator: navigation, filter toggle, session actions
-│       ├── sessions.lua    # Persistence layer: atomic disk writes, schema serialization, rollback
-│       ├── sidebar.lua     # Split view: persistent right-hand call-trace sidebar & cursor sync
+│       ├── sessions.lua    # Core session model, mutation API, and atomic disk persistence
+│       ├── events.lua      # Event bus for session mutations and lifecycle notifications
+│       ├── location.lua    # Tree-sitter AST function declaration resolver and fallback
+│       ├── sidebar.lua     # Split view: persistent right-hand call-trace sidebar & path editor
 │       ├── parser.lua      # Pattern matcher: parses multi-language stack traces & normalizes paths
 │       ├── collector.lua   # Aggregator: deduplicates files in trace order & tags vendor paths
 │       ├── decorator.lua   # Extmarks: renders virtual line banners (virt_lines) above fault lines
@@ -44,7 +46,10 @@ This guide is designed for engineers who are working on `unwind.nvim`. We cover 
 └── tests/
     ├── fixtures/           # Real-world crash traces and test dummy files
     ├── parser_spec.lua     # Automated functional, regression, and invariant test suite
-    └── leak_spec.lua       # Memory stability, garbage collection, and window/buffer leak test
+    ├── leak_spec.lua       # Memory stability, garbage collection, and window/buffer leak test
+    ├── session_spec.lua    # Session model, mutation API, and disk persistence test suite
+    ├── clipboard_spec.lua  # Clipboard isolation test suite
+    └── location_spec.lua   # Tree-sitter and cursor location extraction test suite
 ```
 
 ---
