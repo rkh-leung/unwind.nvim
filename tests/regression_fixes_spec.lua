@@ -31,13 +31,16 @@ local parser = require("unwind.parser")
 local persistence = require("unwind.persistence")
 local session_actions = require("unwind.session_actions")
 
-local test_root = vim.fs.normalize(vim.fn.getcwd())
+local test_env = require("tests.helpers.environment")
+local isolated = test_env.setup_isolated_env()
+local test_root = test_env.create_temp_dir("regression_fixes_root_")
 
 print("--> [Checklist 1/8] Persistence round-trip with remote path mapping (P0)...")
 do
   unwind.clear()
+  state.set_root(test_root)
   -- Use an isolated temporary directory for test
-  local temp_dir = vim.fn.tempname()
+  local temp_dir = test_env.create_temp_dir("remote_map_")
   vim.fn.mkdir(temp_dir .. "/local_src", "p")
   local dummy_local = temp_dir .. "/local_src/worker.py"
   local f = io.open(dummy_local, "w")
@@ -80,7 +83,10 @@ do
   -- Jump to frame and assert correct local buffer is opened
   local cur_buf = vim.api.nvim_get_current_buf()
   local cur_buf_name = vim.fs.normalize(vim.api.nvim_buf_get_name(cur_buf))
-  assert_eq(cur_buf_name, dummy_local, "navigated to local source file")
+  -- On macOS /var is often a symlink to /private/var, so canonicalize realpath for comparison
+  local real_cur = (vim.uv or vim.loop).fs_realpath(cur_buf_name) or cur_buf_name
+  local real_expected = (vim.uv or vim.loop).fs_realpath(dummy_local) or dummy_local
+  assert_eq(vim.fs.normalize(real_cur), vim.fs.normalize(real_expected), "navigated to local source file")
 
   -- Cleanup
   sessions.delete(reloaded_session, list, test_root)
@@ -237,7 +243,9 @@ do
   -- First entry is valid and remapped to expected_file (assert exact filename, not method fallback)
   assert_eq(qflist[1].valid, 1, "first item is valid")
   local actual_fname = vim.fs.normalize(vim.fn.bufname(qflist[1].bufnr))
-  assert_eq(actual_fname, expected_file, "first item points exactly to resolved filename")
+  local real_actual = (vim.uv or vim.loop).fs_realpath(actual_fname) or actual_fname
+  local real_expected = (vim.uv or vim.loop).fs_realpath(expected_file) or expected_file
+  assert_eq(vim.fs.normalize(real_actual), vim.fs.normalize(real_expected), "first item points exactly to resolved filename")
   assert_eq(qflist[1].lnum, 1, "first item line number")
   assert_eq(qflist[1].col, 2, "first item column")
 
@@ -299,14 +307,18 @@ do
   assert_eq(state.get_root(), root_a, "active root is root_a")
   assert_eq(sess_a.frames[1].resolved_path, file_a, "session A resolved to file_a")
   local cur_buf_a = vim.fs.normalize(vim.api.nvim_buf_get_name(0))
-  assert_eq(cur_buf_a, file_a, "navigation opened file_a")
+  local real_cur_a = (vim.uv or vim.loop).fs_realpath(cur_buf_a) or cur_buf_a
+  local real_expected_a = (vim.uv or vim.loop).fs_realpath(file_a) or file_a
+  assert_eq(vim.fs.normalize(real_cur_a), vim.fs.normalize(real_expected_a), "navigation opened file_a")
 
   -- Switch active project to session B
   unwind.activate_session(sess_b)
   assert_eq(state.get_root(), root_b, "active root switched to root_b")
   assert_eq(sess_b.frames[1].resolved_path, file_b, "session B resolved to file_b")
   local cur_buf_b = vim.fs.normalize(vim.api.nvim_buf_get_name(0))
-  assert_eq(cur_buf_b, file_b, "navigation opened file_b")
+  local real_cur_b = (vim.uv or vim.loop).fs_realpath(cur_buf_b) or cur_buf_b
+  local real_expected_b = (vim.uv or vim.loop).fs_realpath(file_b) or file_b
+  assert_eq(vim.fs.normalize(real_cur_b), vim.fs.normalize(real_expected_b), "navigation opened file_b")
 
   -- Mutate session B (e.g. toggle filter) and verify session A's disk persistence is unaffected
   unwind.toggle_filter()
@@ -358,7 +370,9 @@ do
   local selected, opened = unwind.jump_to_frame(1)
   assert_true(selected and opened, "navigation succeeds now that file is restored")
   local cur_buf = vim.fs.normalize(vim.api.nvim_buf_get_name(0))
-  assert_eq(cur_buf, dyn_file, "opened restored file in source window")
+  local real_cur_dyn = (vim.uv or vim.loop).fs_realpath(cur_buf) or cur_buf
+  local real_expected_dyn = (vim.uv or vim.loop).fs_realpath(dyn_file) or dyn_file
+  assert_eq(vim.fs.normalize(real_cur_dyn), vim.fs.normalize(real_expected_dyn), "opened restored file in source window")
 
   pcall(vim.fn.delete, temp_dir, "rf")
   unwind.clear()
@@ -452,5 +466,8 @@ do
   pcall(vim.fn.delete, temp_dir, "rf")
   unwind.clear()
 end
+
+isolated.cleanup()
+test_env.cleanup_all()
 
 print("All regression checklist tests PASSED successfully!")

@@ -51,13 +51,16 @@ local function benchmark(name, iterations, fn, warmup_count)
   }
 end
 
+local test_env = require("tests.helpers.environment")
+local env_setup = test_env.setup_isolated_env()
+
 local parser = require("unwind.parser")
 local collector = require("unwind.collector")
 local sessions = require("unwind.sessions")
 local sidebar = require("unwind.sidebar")
 local unwind = require("unwind")
 
-local cwd = vim.fs.normalize(vim.fn.getcwd())
+local cwd = test_env.create_temp_dir("bench_root_")
 
 print("=========================================================================")
 print(string.format("Unwind Benchmarks | Neovim %s | Lua %s", tostring(vim.version()), _VERSION))
@@ -285,5 +288,8 @@ end
 print("=========================================================================")
 print("Benchmark run complete.")
 print("=========================================================================")
+
+env_setup.cleanup()
+test_env.cleanup_all()
 
 return results

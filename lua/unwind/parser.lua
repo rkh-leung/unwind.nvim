@@ -688,6 +688,10 @@ function M.parse(text, opts)
       frame.source_kind = nil
       frame.resolution = nil
     end
+
+    if not frame.origin then
+      frame.origin = "stacktrace"
+    end
   end
 
   return frames

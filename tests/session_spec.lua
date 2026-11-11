@@ -15,9 +15,11 @@ local function assert_true(val, msg)
   end
 end
 
+local test_env = require("tests.helpers.environment")
+local env_setup = test_env.setup_isolated_env()
 local sessions = require("unwind.sessions")
 local events = require("unwind.events")
-local test_root = vim.fs.normalize(vim.fn.getcwd())
+local test_root = test_env.create_temp_dir("session_spec_root_")
 local storage_file = sessions.storage_path(test_root)
 
 print("--> [Session Spec 1] Creates an empty unnamed session...")
@@ -87,7 +89,6 @@ do
 
   -- Cleanup
   sessions.delete(s, list, test_root)
-  pcall(os.remove, storage_file)
 end
 
 print("--> [Session Spec 4] Event emissions on session lifecycle...")
@@ -115,7 +116,6 @@ do
   events.off("session_created", id1)
   events.off("session_changed", id2)
   events.off("session_deleted", id3)
-  pcall(os.remove, storage_file)
 end
 
 print("--> [Session Spec 5] Moving frames preserves active selection correctly...")
@@ -137,5 +137,66 @@ do
   -- active was f1 at index 2, now at index 3
   assert_eq(s.active_index, 3, "active_index adjusted when other frame moved before it")
 end
+
+print("--> [Session Spec 6] Mutation failure handling and rollback in add_current_location...")
+do
+  local unwind = require("unwind")
+  local persistence = require("unwind.persistence")
+  local state = require("unwind.state")
+
+  unwind.clear()
+  local dummy_buf = vim.api.nvim_create_buf(true, false)
+  local file_path = test_root .. "/dummy_add.lua"
+  vim.api.nvim_buf_set_name(dummy_buf, file_path)
+  vim.api.nvim_buf_set_lines(dummy_buf, 0, -1, false, { "line 1", "line 2", "line 3" })
+  vim.api.nvim_win_set_buf(0, dummy_buf)
+  vim.api.nvim_win_set_cursor(0, { 2, 1 })
+
+  -- Setup a saved named session
+  state.set_root(test_root)
+  local list = state.ensure_sessions_loaded(test_root)
+  local s = sessions.create({ root = test_root, name = "Persisted Add Test" })
+  sessions.save_working(s, "Persisted Add Test", list, test_root)
+  state.set_current(s)
+
+  assert_eq(#s.raw_frames, 0)
+  assert_eq(s.active_index, 0)
+
+  -- Simulate persistence failure
+  local orig_save = persistence.save
+  persistence.save = function() return false end
+
+  local err_notified = false
+  local info_notified = false
+  local orig_notify = vim.notify
+  vim.notify = function(msg, lvl)
+    if lvl == vim.log.levels.ERROR then
+      err_notified = true
+    elseif lvl == vim.log.levels.INFO then
+      info_notified = true
+    end
+  end
+
+  unwind.add_current_location()
+
+  vim.notify = orig_notify
+  persistence.save = orig_save
+
+  assert_true(err_notified, "error notification emitted on failed add")
+  assert_true(not info_notified, "no success message emitted on failed add")
+  assert_eq(#s.raw_frames, 0, "raw frames rolled back to 0")
+  assert_eq(s.active_index, 0, "active_index not advanced")
+
+  -- Restore persistence and retry
+  unwind.add_current_location()
+  assert_eq(#s.raw_frames, 1, "successfully added frame after persistence restored")
+  assert_eq(s.active_index, 1, "active_index updated after successful add")
+
+  pcall(vim.api.nvim_buf_delete, dummy_buf, { force = true })
+  unwind.clear()
+end
+
+env_setup.cleanup()
+test_env.cleanup_all()
 
 print("All session spec tests PASSED successfully!")

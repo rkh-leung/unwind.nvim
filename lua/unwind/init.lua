@@ -252,6 +252,10 @@ function M.activate_session(session)
 end
 
 --- Ingest a raw plain-text stacktrace string
+--- Direct string ingestion updates active session and derived frames without opening sidebar
+--- unless the sidebar was already open, preserving existing view layout for programmatic callers.
+--- Interactive ingestion entry points (clipboard, scratchpad, file) open the sidebar via activate_session.
+--- In all cases, a new transient session is created and active state is updated.
 ---@param text string
 ---@return table|nil session
 function M.ingest(text)
@@ -457,7 +461,12 @@ function M.add_current_location()
     state.set_current(session)
   end
 
-  sessions.add_frame(session, frame_data, nil, state.raw.sessions)
+  local ok, err = sessions.add_frame(session, frame_data, nil, state.raw.sessions)
+  if not ok then
+    vim.notify("Unwind: Failed to add location: " .. tostring(err or "persistence error"), vim.log.levels.ERROR)
+    return
+  end
+
   M.rebuild_derived(session)
 
   if not sidebar.is_open() then

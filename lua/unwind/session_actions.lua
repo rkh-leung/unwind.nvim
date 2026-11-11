@@ -209,6 +209,63 @@ function M.toggle_filter(session, saved_sessions, config)
   navigation.jump_to_frame(session, target)
 end
 
+--- Synchronize active presentation (sidebar selection, footer, and virtual-line extmarks)
+--- without changing the focused source window.
+--- If the active frame's file is loaded in a buffer, refreshes virtual lines to match current depth/total.
+--- If missing or invalid, clears virtual lines without creating dummy buffers.
+---@param session table
+function M.refresh_active_presentation(session)
+  if not session or not session.frames or #session.frames == 0 then
+    decorator.clear()
+    sidebar.render(session)
+    return
+  end
+
+  local idx = session.active_index
+  if not idx or idx < 1 or idx > #session.frames then
+    idx = math.max(1, math.min(idx or 1, #session.frames))
+    session.active_index = idx
+  end
+
+  sidebar.render(session)
+  sidebar.set_active(session, idx)
+
+  local frame = session.frames[idx]
+  if not frame then
+    decorator.clear()
+    return
+  end
+
+  -- Sync active_file_index
+  if frame.file_index and session.files and session.files[frame.file_index] then
+    session.active_file_index = frame.file_index
+  end
+
+  local file_entry = (frame.file_index and session.files) and session.files[frame.file_index] or nil
+  local is_avail = (file_entry and file_entry.available ~= false) and (frame.navigable ~= false)
+  if not is_avail then
+    decorator.clear()
+    return
+  end
+
+  local root = session.root or vim.fs.normalize(vim.fn.getcwd())
+  local target_path = (file_entry and file_entry.canonical_resolved) or frame.resolved_path or frame.file
+  if not require("unwind.path").is_absolute(target_path) then
+    target_path = root .. "/" .. target_path
+  end
+  target_path = vim.fs.normalize(target_path)
+
+  local bufnr = vim.fn.bufnr(target_path)
+  if bufnr ~= -1 and vim.api.nvim_buf_is_valid(bufnr) and vim.api.nvim_buf_is_loaded(bufnr) then
+    decorator.render(bufnr, frame.line or 1, idx, frame.method, frame.file, #session.frames, {
+      origin = frame.origin,
+      note = frame.note,
+    })
+  else
+    decorator.clear()
+  end
+end
+
 --- Move a frame in session (reorder up/down)
 ---@param session table
 ---@param from_idx number
@@ -219,6 +276,9 @@ function M.move_frame_in_session(session, from_idx, to_idx, saved_sessions, conf
   if not session or not session.frames or not session.frames[from_idx] or not session.frames[to_idx] then
     return
   end
+
+  local active_frame = (session.active_index and session.active_index > 0) and session.frames[session.active_index] or nil
+
   local target_frame = session.frames[from_idx]
   local raw_from_idx = target_frame.raw_index
 
@@ -229,9 +289,19 @@ function M.move_frame_in_session(session, from_idx, to_idx, saved_sessions, conf
     local ok = sessions.move_frame(session, raw_from_idx, raw_to_idx, saved_sessions)
     if ok then
       M.rebuild_derived(session, config)
-      session.active_index = to_idx
-      sidebar.render(session)
-      sidebar.set_active(session, to_idx)
+      -- If the moved frame was active, it moved to to_idx.
+      -- If another frame was moved, find where active_frame landed in session.frames
+      if active_frame == target_frame then
+        session.active_index = to_idx
+      elseif active_frame then
+        for i, f in ipairs(session.frames) do
+          if f == active_frame or f.raw_index == active_frame.raw_index then
+            session.active_index = i
+            break
+          end
+        end
+      end
+      M.refresh_active_presentation(session)
     end
   end
 end
@@ -502,7 +572,7 @@ function M.refresh_availability(session, config)
   end
 
   M.rebuild_derived(session, config)
-  sidebar.render(session)
+  M.refresh_active_presentation(session)
   vim.notify("Unwind: Refreshed file availability.", vim.log.levels.INFO)
 end
 

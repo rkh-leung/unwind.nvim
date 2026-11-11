@@ -37,7 +37,7 @@ unwind.nvim/
 │   ├── navigation.lua   # Buffer jumping, cursor positioning, and frame cycling
 │   ├── session_actions.lua # Frame mutations, filter reapplication, refresh
 │   ├── sessions.lua     # Session domain model and mutation rollback
-│   ├── persistence.lua  # Atomic JSON disk persistence layer
+│   ├── persistence.lua  # Atomic JSON disk persistence layer with structural validation
 │   ├── events.lua       # Monotonic event bus for session state changes
 │   ├── location.lua     # Tree-sitter function resolver and cursor extraction
 │   ├── sidebar.lua      # Persistent right-hand call-trace sidebar
@@ -51,13 +51,32 @@ unwind.nvim/
 │       ├── init.lua     # Central resolver chain (workspace -> mappings -> language)
 │       ├── workspace.lua # Workspace path normalizer and container prefix stripper
 │       └── ruby/        # Ruby environment detection, gems, git gems, and stdlib resolver
+├── scripts/
+│   ├── test.sh          # Headless test runner in isolated environment
+│   └── benchmark.sh     # Headless benchmark runner in isolated environment
 └── tests/
+    ├── helpers/         # Test environment isolation utilities
     ├── fixtures/        # Sample stack traces (Raygun, Rust, Node.js, Ruby, dummy fixtures)
-    ├── parser_spec.lua  # Headless test runner testing parsing, navigation, persistence, and invariants
-    ├── leak_spec.lua    # Memory stability and lifecycle verification
-    ├── session_spec.lua # Session lifecycle, mutation API, and persistence tests
-    ├── clipboard_spec.lua # Clipboard isolation and non-mutating start tests
-    └── location_spec.lua  # Tree-sitter and cursor location resolution tests
+    ├── annotation_spec.lua
+    ├── clipboard_spec.lua
+    ├── collector_spec.lua
+    ├── correctness_spec.lua
+    ├── decoration_sync_spec.lua
+    ├── ingestion_spec.lua
+    ├── isolation_spec.lua
+    ├── leak_spec.lua
+    ├── location_spec.lua
+    ├── parser_spec.lua
+    ├── path_spec.lua
+    ├── perf_spec.lua
+    ├── persistence_validation_spec.lua
+    ├── regression_fixes_spec.lua
+    ├── ruby_resolver_spec.lua
+    ├── ruby/git_gems_spec.lua
+    ├── ruby/stdlib_spec.lua
+    ├── session_spec.lua
+    ├── sidebar_spec.lua
+    └── state_spec.lua
 ```
 
 ### End-to-End Execution Flow
