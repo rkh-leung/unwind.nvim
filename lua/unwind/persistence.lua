@@ -48,6 +48,9 @@ function M.serialize_session(session)
     if f.resolution ~= nil then
       serialized_f.resolution = f.resolution
     end
+    if f.note ~= nil and f.note ~= "" then
+      serialized_f.note = f.note
+    end
     table.insert(frames, serialized_f)
   end
 
@@ -114,6 +117,7 @@ function M.load(root)
           external = f.external,
           source_kind = f.source_kind,
           resolution = f.resolution,
+          note = (f.note ~= nil and vim.trim(tostring(f.note)) ~= "") and vim.trim(tostring(f.note)) or nil,
         })
       end
 

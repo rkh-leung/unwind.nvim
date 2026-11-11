@@ -292,6 +292,10 @@ function M.replace_frame_in_session(session, frame_idx, saved_sessions, config)
   local target_frame = session.frames[frame_idx]
   local raw_idx = target_frame.raw_index
 
+  if target_frame and target_frame.note ~= nil and frame_data.note == nil then
+    frame_data.note = target_frame.note
+  end
+
   if raw_idx then
     local ok = sessions.update_frame(session, raw_idx, frame_data, saved_sessions)
     if ok then
@@ -302,6 +306,109 @@ function M.replace_frame_in_session(session, frame_idx, saved_sessions, config)
       vim.notify(string.format("Unwind: Replaced frame %d with %s:%d.", frame_idx, frame_data.file, frame_data.line), vim.log.levels.INFO)
     end
   end
+end
+
+--- Annotate a frame in session
+---@param session table
+---@param frame_idx_or_target number|table Frame index in session.frames or the frame object itself
+---@param note_text? string
+---@param saved_sessions table[]
+---@param config table
+---@return boolean ok
+function M.annotate_frame_in_session(session, frame_idx_or_target, note_text, saved_sessions, config)
+  if not session then
+    return false
+  end
+
+  local target_frame = nil
+  local frame_idx = nil
+
+  if type(frame_idx_or_target) == "table" then
+    target_frame = frame_idx_or_target
+    for idx, f in ipairs(session.frames or {}) do
+      if f == target_frame or f.raw_index == target_frame.raw_index then
+        frame_idx = idx
+        break
+      end
+    end
+  elseif type(frame_idx_or_target) == "number" then
+    frame_idx = frame_idx_or_target
+    target_frame = session.frames and session.frames[frame_idx]
+  end
+
+  if not target_frame then
+    return false
+  end
+
+  -- Locate raw_idx stably by exact object identity
+  local raw_idx = nil
+  for idx, rf in ipairs(session.raw_frames or {}) do
+    if rf == target_frame then
+      raw_idx = idx
+      break
+    end
+  end
+
+  -- If target was passed as a numeric index, allow using target_frame.raw_index if still pointing to target_frame
+  if not raw_idx and type(frame_idx_or_target) == "number" and target_frame.raw_index then
+    if session.raw_frames and session.raw_frames[target_frame.raw_index] == target_frame then
+      raw_idx = target_frame.raw_index
+    end
+  end
+
+  if not raw_idx or not session.raw_frames or not session.raw_frames[raw_idx] then
+    return false
+  end
+
+  local existing_raw = session.raw_frames[raw_idx]
+  local clean_note = nil
+  if note_text ~= nil then
+    local trimmed = vim.trim(tostring(note_text))
+    if trimmed ~= "" then
+      clean_note = trimmed
+    end
+  end
+
+  local updated_frame = {
+    path = existing_raw.path,
+    file = existing_raw.file,
+    line = existing_raw.line,
+    col = existing_raw.col,
+    column = existing_raw.column,
+    method = existing_raw.method,
+    origin = existing_raw.origin,
+    raw_line = existing_raw.raw_line,
+    resolved_path = existing_raw.resolved_path,
+    navigable = existing_raw.navigable,
+    external = existing_raw.external,
+    source_kind = existing_raw.source_kind,
+    resolution = existing_raw.resolution,
+    note = clean_note,
+  }
+
+  local ok, err = sessions.update_frame(session, raw_idx, updated_frame, saved_sessions)
+  if not ok then
+    vim.notify("Unwind: Failed to persist annotation: " .. tostring(err), vim.log.levels.ERROR)
+    return false
+  end
+
+  M.rebuild_derived(session, config)
+  sidebar.render(session)
+
+  -- Find where the frame is in derived frames now
+  local updated_visible_idx = nil
+  for idx, f in ipairs(session.frames or {}) do
+    if f.raw_index == raw_idx then
+      updated_visible_idx = idx
+      break
+    end
+  end
+
+  if updated_visible_idx and session.active_index == updated_visible_idx then
+    navigation.jump_to_frame(session, updated_visible_idx)
+  end
+
+  return true
 end
 
 --- Remove a frame from a session

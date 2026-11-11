@@ -161,6 +161,10 @@ local function get_sidebar_callbacks(session)
       local cur_sess = state.current() or session
       M.move_frame_in_session(cur_sess, from_idx, to_idx)
     end,
+    on_annotate_frame = function(f_idx)
+      local cur_sess = state.current() or session
+      M.annotate(f_idx, cur_sess)
+    end,
     on_replace_frame = function(f_idx)
       local cur_sess = state.current() or session
       M.replace_frame_in_session(cur_sess, f_idx)
@@ -339,6 +343,42 @@ function M.new_session()
   })
   M.activate_session(session)
   return session
+end
+
+--- Annotate a frame in the active session (prompts user for annotation note)
+---@param frame_idx? number Frame index (defaults to active_index)
+---@param session? table Target session (defaults to state.current())
+function M.annotate(frame_idx, session)
+  session = session or state.current()
+  if not session or not session.frames or #session.frames == 0 then
+    vim.notify("Unwind: No active frames to annotate.", vim.log.levels.WARN)
+    return
+  end
+
+  local target_idx = frame_idx or session.active_index
+  if not target_idx or target_idx < 1 or target_idx > #session.frames then
+    target_idx = (session.active_index and session.active_index > 0) and session.active_index or 1
+  end
+
+  local target_frame = session.frames[target_idx]
+  if not target_frame then
+    vim.notify("Unwind: Frame not found.", vim.log.levels.WARN)
+    return
+  end
+
+  local current_note = target_frame.note or ""
+
+  ui.prompt_input("Annotate frame", current_note, function(input_text)
+    -- Finding 3: Abort if target session is no longer active
+    if state.current() ~= session then
+      return
+    end
+
+    -- Finding 2 & 4: Route update through transactional annotate_frame_in_session using target_frame identity
+    local root = session.root or state.get_root()
+    local saved_sessions = state.ensure_sessions_loaded(root)
+    session_actions.annotate_frame_in_session(session, target_frame, input_text, saved_sessions, M.config)
+  end)
 end
 
 --- Prompt for session name and save working session

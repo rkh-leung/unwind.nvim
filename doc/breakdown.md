@@ -73,7 +73,7 @@ This guide is designed for engineers who are working on `unwind.nvim`. We cover 
 
 Key points:
 - Prevents redundant execution using `vim.g.loaded_unwind`.
-- Registers user commands: `:Unwind`, `:UnwindFile`, `:UnwindInput`, `:UnwindClipboard`, `:UnwindSelection`, `:UnwindMenu`, `:UnwindSidebar`, `:UnwindNext`, `:UnwindPrev`, `:UnwindNextFile`, `:UnwindPrevFile`, `:UnwindToggleFilter`, `:UnwindQuickfix`, `:UnwindClear`, `:UnwindRubyInfo`.
+- Registers user commands: `:Unwind`, `:UnwindFile`, `:UnwindInput`, `:UnwindClipboard`, `:UnwindSelection`, `:UnwindMenu`, `:UnwindSidebar`, `:UnwindNext`, `:UnwindPrev`, `:UnwindNextFile`, `:UnwindPrevFile`, `:UnwindToggleFilter`, `:UnwindQuickfix`, `:UnwindClear`, `:UnwindRubyInfo`, `:UnwindAnnotate`.
 - Calls `unwind.install_keymaps()` to bind default single-key leader shortcuts (`<leader>w`, `<leader>c`) without overriding custom user keymaps unless explicitly forced.
 
 ---
@@ -113,7 +113,7 @@ Compatibility metatable `M.state` delegates queries like `unwind.state.frames` t
 **Purpose:** Disk persistence layer managing saved debugging sessions.
 
 - **Storage Location**: Scoped to project root: `stdpath("state")/unwind/<sha256(root)>.json`.
-- **Stable Debugging Facts Only**: Serializes only `name`, `filter_enabled`, and `raw_frames` (`file`, `line`, `col`, `method`, `raw_line`). Excludes runtime handles (bufnr, winid, extmarks, active indices).
+- **Stable Debugging Facts Only**: Serializes only `name`, `filter_enabled`, and `raw_frames` (`file`, `line`, `col`, `method`, `raw_line`, and optional single-line `note`). Excludes runtime handles (bufnr, winid, extmarks, active indices).
 - **Atomic File Writes**: Serializes JSON to a temporary file (`.tmp.<hrtime>`), verifies `write()` and `flush()` success, then renames over the target file via `os.rename()`.
 - **Transactional Rollback**: `save_working()`, `rename()`, and `delete()` revert in-memory mutations if `sessions.save()` returns `false`.
 
@@ -124,7 +124,8 @@ Compatibility metatable `M.state` delegates queries like `unwind.state.frames` t
 **Purpose:** Persistent right-hand vertical split call-trace sidebar.
 
 - **Reusable Split Window**: Uses one persistent `unwind://sidebar` buffer across all sessions.
-- **Trace Formatting**: Renders indexed call frames with method, filename, and line number.
+- **Trace Formatting**: Renders indexed call frames with method, filename, and line number. Renders `●` indicator for annotated frames (`UnwindSidebarAnnotated`).
+- **Interactive Annotation Keybinding (`a`)**: Prepopulates current annotation in `ui.prompt_input()` to add, edit, or remove notes.
 - **Active Missing Frame Highlighting**: Uses `UnwindSidebarActive` combined with `UnwindSidebarMissing` for missing active frames.
 - **Reserved Footer**: Always reserves a footer row during initial render so `set_active()` can update `1/N file:line` when loaded sessions activate.
 - **Bounded Navigation**: Keymaps `<CR>` and `d` enforce row bounds (`1 <= frame_idx <= #frames`), preventing jumps on footer/blank rows.
@@ -150,7 +151,7 @@ Compatibility metatable `M.state` delegates queries like `unwind.state.frames` t
 
 ### 7. `lua/unwind/decorator.lua`
 
-**Purpose:** Draws inline virtual lines (`virt_lines`) above fault lines in source buffers using Neovim's extmarks API (`unwind_diagnostics` namespace).
+**Purpose:** Draws inline virtual lines (`virt_lines`) above fault lines in source buffers using Neovim's extmarks API (`unwind_diagnostics` namespace). Renders contextual headers (`● [DEBUG PATH] Step X/Y: method()` vs `● [STACK FRAME] Frame X/Y: method()`) and displays single-line annotations (`💬 <note>`) using the `UnwindAnnotation` highlight group.
 
 ---
 

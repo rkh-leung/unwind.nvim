@@ -18,6 +18,7 @@ local function setup_highlights()
   vim.api.nvim_set_hl(0, "UnwindSidebarMissing", { default = true, link = "DiagnosticError" })
   vim.api.nvim_set_hl(0, "UnwindSidebarHeader", { default = true, link = "Title" })
   vim.api.nvim_set_hl(0, "UnwindSidebarMuted", { default = true, link = "Comment" })
+  vim.api.nvim_set_hl(0, "UnwindSidebarAnnotated", { default = true, link = "Special" })
 end
 
 --- Check if a window is the sidebar window
@@ -132,7 +133,10 @@ function M.render(session)
 
       -- Compact row formatting:
       --   idx  method/NA   file:line
+      -- If frame has note, show small indicator (●) beside idx
+      local has_note = f.note ~= nil and f.note ~= ""
       local num_str = string.format("%2d", idx)
+      local marker = has_note and "●" or " "
       local loc_str = string.format("%s:%d", vim.fs.basename(f.file or f.path or ""), f.line or 1)
       local status_str
       if not is_avail then
@@ -147,14 +151,14 @@ function M.render(session)
       -- Compute fit
       local row_content
       if loc_str ~= "" then
-        local base_w = strwidth(string.format("  %s   %s", num_str, loc_str))
+        local base_w = strwidth(string.format(" %s%s   %s", marker, num_str, loc_str))
         if base_w + strwidth(status_str) > win_width and win_width > 12 then
           local max_status_w = math.max(4, win_width - strwidth(num_str) - strwidth(loc_str) - 8)
           status_str = text_util.truncate_display(status_str, max_status_w)
         end
-        row_content = string.format("  %s %s  %s", num_str, status_str, loc_str)
+        row_content = string.format(" %s%s %s  %s", marker, num_str, status_str, loc_str)
       else
-        row_content = string.format("  %s %s", num_str, status_str)
+        row_content = string.format(" %s%s %s", marker, num_str, status_str)
       end
 
       table.insert(lines, row_content)
@@ -174,7 +178,8 @@ function M.render(session)
   table.insert(lines, "")
   table.insert(lines, " enter open   d delete")
   table.insert(lines, " J/K move     e replace")
-  table.insert(lines, " s save       q close")
+  table.insert(lines, " a note       s save")
+  table.insert(lines, " q close")
 
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
@@ -189,6 +194,10 @@ function M.render(session)
     local is_avail = true
     if file_entry and file_entry.available ~= nil then
       is_avail = file_entry.available
+    end
+
+    if f.note ~= nil and f.note ~= "" then
+      vim.api.nvim_buf_add_highlight(buf, ns_sidebar, "UnwindSidebarAnnotated", buf_line, 1, 4) -- Highlight ● indicator
     end
 
     if not is_avail then
@@ -361,6 +370,16 @@ function M.open(session, opts)
     local total = #(cur_sess.frames or {})
     if opts.on_move_frame and frame_idx > 1 and frame_idx <= total then
       opts.on_move_frame(frame_idx, frame_idx - 1)
+    end
+  end, key_opts)
+
+  -- a: Annotate selected frame
+  vim.keymap.set("n", "a", function()
+    local cur_sess = get_active_session()
+    local cursor = vim.api.nvim_win_get_cursor(0)
+    local frame_idx = cursor[1] - 2
+    if opts.on_annotate_frame and frame_idx >= 1 and frame_idx <= #(cur_sess.frames or {}) then
+      opts.on_annotate_frame(frame_idx)
     end
   end, key_opts)
 
