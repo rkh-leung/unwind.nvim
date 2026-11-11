@@ -96,14 +96,26 @@ local function validate_frame(f)
   end
 
   local file = (type(f.file) == "string" and f.file ~= "") and f.file or path
-  local line = tonumber(f.line)
-  if not line or line < 1 then
-    line = 1
+
+  -- Validate line: must be valid positive integer if provided
+  local line = 1
+  if f.line ~= nil then
+    local num = tonumber(f.line)
+    if not num or num < 1 or math.floor(num) ~= num then
+      return nil
+    end
+    line = math.floor(num)
   end
 
-  local col = tonumber(f.col or f.column)
-  if not col or col < 1 then
-    col = 1
+  -- Validate col / column: must be valid positive integer if provided
+  local col = 1
+  local raw_col = f.col or f.column
+  if raw_col ~= nil then
+    local num = tonumber(raw_col)
+    if not num or num < 1 or math.floor(num) ~= num then
+      return nil
+    end
+    col = math.floor(num)
   end
 
   local method = (type(f.method) == "string") and f.method or ""
@@ -150,6 +162,9 @@ function M.load(root)
 
   local f = io.open(filepath, "r")
   if not f then
+    -- Existing file could not be opened for reading: protect it from overwrite!
+    M._corrupted_roots[norm_root] = true
+    vim.notify("Unwind: Could not open existing session file for read: " .. filepath, vim.log.levels.WARN)
     return {}
   end
 
@@ -179,11 +194,13 @@ function M.load(root)
     return {}
   end
 
-  -- Validate root matching: Root mismatch indicates wrong state or foreign root; fail closed!
-  if data.root and type(data.root) == "string" and vim.fs.normalize(data.root) ~= norm_root then
-    M._corrupted_roots[norm_root] = true
-    vim.notify(string.format("Unwind: Persisted file root mismatch (expected %s, got %s) in %s", norm_root, data.root, filepath), vim.log.levels.WARN)
-    return {}
+  -- Validate root matching: Root mismatch or invalid type indicates wrong state or foreign root; fail closed!
+  if data.root ~= nil then
+    if type(data.root) ~= "string" or vim.fs.normalize(data.root) ~= norm_root then
+      M._corrupted_roots[norm_root] = true
+      vim.notify(string.format("Unwind: Persisted file root mismatch (expected %s, got %s) in %s", norm_root, tostring(data.root), filepath), vim.log.levels.WARN)
+      return {}
+    end
   end
 
   -- Validate sessions collection

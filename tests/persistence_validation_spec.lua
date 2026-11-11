@@ -160,6 +160,70 @@ do
   assert_eq(bytes, encoded_raw, "foreign root file bytes preserved")
 end
 
+print("--> [Persistence Val 6c] Non-string root type fails closed and protects data...")
+do
+  local payload = {
+    schema_version = 1,
+    root = 12345, -- invalid type
+    sessions = {},
+  }
+  local encoded_raw = vim.json.encode(payload)
+  write_raw(encoded_raw)
+
+  local loaded = persistence.load(test_root)
+  assert_eq(#loaded, 0)
+  assert_true(persistence.is_corrupted(test_root), "invalid root type flagged as corrupt")
+
+  local saved_ok = persistence.save(test_root, {})
+  assert_eq(saved_ok, false)
+
+  local f = io.open(storage_file, "r")
+  local bytes = f:read("*all")
+  f:close()
+  assert_eq(bytes, encoded_raw)
+end
+
+print("--> [Persistence Val 6d] Invalid line or col values rejected cleanly...")
+do
+  local payload_bad_line = {
+    schema_version = 1,
+    root = test_root,
+    sessions = {
+      {
+        id = "s_bad_line",
+        name = "Bad Line",
+        frames = {
+          { file = "ok.py", line = -5 },
+        },
+      },
+    },
+  }
+  local encoded_bad_line = vim.json.encode(payload_bad_line)
+  write_raw(encoded_bad_line)
+  local loaded = persistence.load(test_root)
+  assert_eq(#loaded, 0, "negative line rejected")
+  assert_true(persistence.is_corrupted(test_root))
+
+  local payload_bad_col = {
+    schema_version = 1,
+    root = test_root,
+    sessions = {
+      {
+        id = "s_bad_col",
+        name = "Bad Col",
+        frames = {
+          { file = "ok.py", line = 10, col = "not_a_num" },
+        },
+      },
+    },
+  }
+  local encoded_bad_col = vim.json.encode(payload_bad_col)
+  write_raw(encoded_bad_col)
+  local loaded2 = persistence.load(test_root)
+  assert_eq(#loaded2, 0, "invalid col string rejected")
+  assert_true(persistence.is_corrupted(test_root))
+end
+
 print("--> [Persistence Val 7] Unsupported future schema versions...")
 do
   local payload = {

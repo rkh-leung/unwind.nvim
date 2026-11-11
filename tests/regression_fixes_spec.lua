@@ -31,13 +31,16 @@ local parser = require("unwind.parser")
 local persistence = require("unwind.persistence")
 local session_actions = require("unwind.session_actions")
 
-local test_root = vim.fs.normalize(vim.fn.getcwd())
+local test_env = require("tests.helpers.environment")
+local isolated = test_env.setup_isolated_env()
+local test_root = test_env.create_temp_dir("regression_fixes_root_")
 
 print("--> [Checklist 1/8] Persistence round-trip with remote path mapping (P0)...")
 do
   unwind.clear()
+  state.set_root(test_root)
   -- Use an isolated temporary directory for test
-  local temp_dir = vim.fn.tempname()
+  local temp_dir = test_env.create_temp_dir("remote_map_")
   vim.fn.mkdir(temp_dir .. "/local_src", "p")
   local dummy_local = temp_dir .. "/local_src/worker.py"
   local f = io.open(dummy_local, "w")
@@ -463,5 +466,8 @@ do
   pcall(vim.fn.delete, temp_dir, "rf")
   unwind.clear()
 end
+
+isolated.cleanup()
+test_env.cleanup_all()
 
 print("All regression checklist tests PASSED successfully!")
