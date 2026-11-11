@@ -240,7 +240,9 @@ do
   -- First entry is valid and remapped to expected_file (assert exact filename, not method fallback)
   assert_eq(qflist[1].valid, 1, "first item is valid")
   local actual_fname = vim.fs.normalize(vim.fn.bufname(qflist[1].bufnr))
-  assert_eq(actual_fname, expected_file, "first item points exactly to resolved filename")
+  local real_actual = (vim.uv or vim.loop).fs_realpath(actual_fname) or actual_fname
+  local real_expected = (vim.uv or vim.loop).fs_realpath(expected_file) or expected_file
+  assert_eq(vim.fs.normalize(real_actual), vim.fs.normalize(real_expected), "first item points exactly to resolved filename")
   assert_eq(qflist[1].lnum, 1, "first item line number")
   assert_eq(qflist[1].col, 2, "first item column")
 
