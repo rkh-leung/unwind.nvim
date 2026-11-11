@@ -304,14 +304,18 @@ do
   assert_eq(state.get_root(), root_a, "active root is root_a")
   assert_eq(sess_a.frames[1].resolved_path, file_a, "session A resolved to file_a")
   local cur_buf_a = vim.fs.normalize(vim.api.nvim_buf_get_name(0))
-  assert_eq(cur_buf_a, file_a, "navigation opened file_a")
+  local real_cur_a = (vim.uv or vim.loop).fs_realpath(cur_buf_a) or cur_buf_a
+  local real_expected_a = (vim.uv or vim.loop).fs_realpath(file_a) or file_a
+  assert_eq(vim.fs.normalize(real_cur_a), vim.fs.normalize(real_expected_a), "navigation opened file_a")
 
   -- Switch active project to session B
   unwind.activate_session(sess_b)
   assert_eq(state.get_root(), root_b, "active root switched to root_b")
   assert_eq(sess_b.frames[1].resolved_path, file_b, "session B resolved to file_b")
   local cur_buf_b = vim.fs.normalize(vim.api.nvim_buf_get_name(0))
-  assert_eq(cur_buf_b, file_b, "navigation opened file_b")
+  local real_cur_b = (vim.uv or vim.loop).fs_realpath(cur_buf_b) or cur_buf_b
+  local real_expected_b = (vim.uv or vim.loop).fs_realpath(file_b) or file_b
+  assert_eq(vim.fs.normalize(real_cur_b), vim.fs.normalize(real_expected_b), "navigation opened file_b")
 
   -- Mutate session B (e.g. toggle filter) and verify session A's disk persistence is unaffected
   unwind.toggle_filter()
@@ -363,7 +367,9 @@ do
   local selected, opened = unwind.jump_to_frame(1)
   assert_true(selected and opened, "navigation succeeds now that file is restored")
   local cur_buf = vim.fs.normalize(vim.api.nvim_buf_get_name(0))
-  assert_eq(cur_buf, dyn_file, "opened restored file in source window")
+  local real_cur_dyn = (vim.uv or vim.loop).fs_realpath(cur_buf) or cur_buf
+  local real_expected_dyn = (vim.uv or vim.loop).fs_realpath(dyn_file) or dyn_file
+  assert_eq(vim.fs.normalize(real_cur_dyn), vim.fs.normalize(real_expected_dyn), "opened restored file in source window")
 
   pcall(vim.fn.delete, temp_dir, "rf")
   unwind.clear()
