@@ -266,16 +266,29 @@ function M.open_session_manager(items, callbacks)
   vim.bo[buf].buflisted = false
 
   local strwidth = vim.api.nvim_strwidth or function(s) return #s end
+  local text_util = require("unwind.text")
 
-  local function format_session_suffix(it)
+  local function get_session_suffix(it, avail_w)
     local count = it.total_frames or it.frame_count or 0
     local frame_suffix = string.format("%d frame%s", count, count == 1 and "" or "s")
+
+    local candidate_full = nil
     if it.project_frames ~= nil and it.size_str ~= nil then
-      return string.format("%s (%d project)  %s", frame_suffix, it.project_frames, it.size_str)
-    elseif it.project_frames ~= nil then
-      return string.format("%s (%d project)", frame_suffix, it.project_frames)
+      candidate_full = string.format("%s (%d project)  %s", frame_suffix, it.project_frames, it.size_str)
+    end
+
+    local candidate_proj = nil
+    if it.project_frames ~= nil then
+      candidate_proj = string.format("%s (%d project)", frame_suffix, it.project_frames)
     elseif it.size_str ~= nil then
-      return string.format("%s  %s", frame_suffix, it.size_str)
+      candidate_proj = string.format("%s  %s", frame_suffix, it.size_str)
+    end
+
+    local min_name_w = 12
+    if candidate_full and (not avail_w or (strwidth(candidate_full) + min_name_w + 2 <= avail_w)) then
+      return candidate_full
+    elseif candidate_proj and (not avail_w or (strwidth(candidate_proj) + min_name_w + 2 <= avail_w)) then
+      return candidate_proj
     else
       return frame_suffix
     end
@@ -291,11 +304,11 @@ function M.open_session_manager(items, callbacks)
     elseif it.type == "save_action" then
       text = "Save current session..."
     elseif it.type == "current_status" then
-      text = string.format("Current: %s  %s", it.name or "Untitled", format_session_suffix(it))
+      text = string.format("Current: %s  %s", it.name or "Untitled", get_session_suffix(it, nil))
     elseif it.type == "separator" then
       text = it.text or "Saved Sessions"
     elseif it.type == "session" then
-      text = (it.name or "") .. "  " .. format_session_suffix(it)
+      text = (it.name or "") .. "  " .. get_session_suffix(it, nil)
     end
     local w = strwidth(text)
     if w > max_text_len then
@@ -321,20 +334,21 @@ function M.open_session_manager(items, callbacks)
       table.insert(lines, "")
     elseif it.type == "current_status" then
       local name = it.name or "Untitled"
-      local suffix = format_session_suffix(it)
+      local avail_w = win_width - 4
+      local suffix = get_session_suffix(it, avail_w)
       local suffix_w = strwidth(suffix)
-      local label = "Current: " .. name
-      local label_w = strwidth(label)
-      local max_label_w = (win_width - 2) - suffix_w - 4
-      if label_w > max_label_w and max_label_w > 8 then
-        local trunc = name
-        while strwidth("Current: " .. trunc .. "...") > max_label_w and #trunc > 0 do
-          trunc = trunc:sub(1, -2)
+      local prefix = "Current: "
+      local prefix_w = strwidth(prefix)
+      local max_name_w = math.max(4, avail_w - suffix_w - 2 - prefix_w)
+      if strwidth(name) > max_name_w then
+        if max_name_w > 4 then
+          name = text_util.truncate_display(name, max_name_w - 3) .. "..."
+        else
+          name = text_util.truncate_display(name, max_name_w)
         end
-        label = "Current: " .. trunc .. "..."
-        label_w = strwidth(label)
       end
-      local pad = math.max(2, (win_width - 2) - label_w - suffix_w - 2)
+      local label = prefix .. name
+      local pad = math.max(2, (win_width - 2) - strwidth(label) - suffix_w - 2)
       table.insert(lines, "  " .. label .. string.rep(" ", pad) .. suffix)
     elseif it.type == "save_action" then
       table.insert(lines, "  Save current session...")
@@ -345,19 +359,18 @@ function M.open_session_manager(items, callbacks)
       table.insert(lines, sep_line .. string.rep("─", fill))
     else
       local name = it.name or "Untitled"
-      local suffix = format_session_suffix(it)
+      local avail_w = win_width - 4
+      local suffix = get_session_suffix(it, avail_w)
       local suffix_w = strwidth(suffix)
-      local max_name_w = (win_width - 2) - suffix_w - 4
-      local name_w = strwidth(name)
-      if name_w > max_name_w and max_name_w > 5 then
-        local trunc = name
-        while strwidth(trunc .. "...") > max_name_w and #trunc > 0 do
-          trunc = trunc:sub(1, -2)
+      local max_name_w = math.max(4, avail_w - suffix_w - 2)
+      if strwidth(name) > max_name_w then
+        if max_name_w > 4 then
+          name = text_util.truncate_display(name, max_name_w - 3) .. "..."
+        else
+          name = text_util.truncate_display(name, max_name_w)
         end
-        name = trunc .. "..."
-        name_w = strwidth(name)
       end
-      local pad = math.max(2, (win_width - 2) - name_w - suffix_w - 2)
+      local pad = math.max(2, (win_width - 2) - strwidth(name) - suffix_w - 2)
       table.insert(lines, "  " .. name .. string.rep(" ", pad) .. suffix)
     end
   end

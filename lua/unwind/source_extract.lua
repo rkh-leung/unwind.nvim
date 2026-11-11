@@ -135,10 +135,34 @@ function M.methods_disagree(trace_method, extracted_name)
   return true
 end
 
+--- Create a scoped extraction context to reuse parsed files and methods within a single export
+---@return table context
+function M.create_context()
+  local ctx = {
+    sources = {},        -- abs_path -> source record or false
+    methods = {},        -- "abs_path:start_row:end_row" -> method record
+    temp_buffers = {},   -- scratch buffers allocated by this context
+  }
+
+  function ctx:dispose()
+    for _, bufnr in ipairs(self.temp_buffers) do
+      if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+        pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+      end
+    end
+    self.sources = {}
+    self.methods = {}
+    self.temp_buffers = {}
+  end
+
+  return ctx
+end
+
 --- Extract enclosing method or context excerpt for a frame
 ---@param abs_path string
 ---@param target_line number
----@param opts? { method_hint?: string, fallback_context_lines?: number }
+---@param opts? { column?: number, col?: number, method_hint?: string, fallback_context_lines?: number }
+---@param ctx? table Optional per-export extraction context for caching
 ---@return {
 ---   kind: "method"|"excerpt",
 ---   name: string,
@@ -148,70 +172,145 @@ end
 ---   end_line: number,
 ---   trace_line: number,
 ---   source_type: string,
----   truncated: boolean,
 ---   incomplete?: boolean,
 ---   warning?: string
 --- }|nil
-function M.extract(abs_path, target_line, opts)
+function M.extract(abs_path, target_line, opts, ctx)
   opts = opts or {}
   local method_hint = opts.method_hint
   local fallback_lines_count = opts.fallback_context_lines or 10
 
-  local src = M.read_source(abs_path)
-  if not src then
+  local file_entry = nil
+  if ctx and ctx.sources then
+    file_entry = ctx.sources[abs_path]
+  end
+
+  if file_entry == false then
     return nil
   end
 
-  local lines = src.lines
-  local total_lines = #lines
-  local fence_lang = M.detect_fence_lang(abs_path)
+  if not file_entry then
+    local src = M.read_source(abs_path)
+    if not src then
+      if ctx and ctx.sources then
+        ctx.sources[abs_path] = false
+      end
+      return nil
+    end
+
+    local fence_lang = M.detect_fence_lang(abs_path)
+    local scratch_buf = nil
+    local owns_scratch = false
+
+    if vim.treesitter and vim.treesitter.get_parser then
+      if src.bufnr then
+        scratch_buf = src.bufnr
+      else
+        scratch_buf = vim.api.nvim_create_buf(false, true)
+        owns_scratch = true
+        if ctx and ctx.temp_buffers then
+          table.insert(ctx.temp_buffers, scratch_buf)
+        end
+        pcall(vim.api.nvim_buf_set_lines, scratch_buf, 0, -1, false, src.lines)
+      end
+    end
+
+    local lang_to_use = fence_lang
+    local ts_parser = nil
+    if scratch_buf then
+      local ok_lang, parser_lang = pcall(function()
+        local ft = vim.filetype.match({ filename = abs_path, buf = scratch_buf })
+        return ft or fence_lang
+      end)
+      lang_to_use = (ok_lang and parser_lang and parser_lang ~= "") and parser_lang or fence_lang
+      local ok_p, p = pcall(vim.treesitter.get_parser, scratch_buf, lang_to_use)
+      if ok_p and p then
+        ts_parser = p
+        pcall(function() p:parse() end)
+      end
+    end
+
+    file_entry = {
+      lines = src.lines,
+      total_lines = #src.lines,
+      source_type = src.source_type,
+      fence_lang = fence_lang,
+      lang_to_use = lang_to_use,
+      scratch_buf = scratch_buf,
+      owns_scratch = owns_scratch,
+      ts_parser = ts_parser,
+    }
+
+    if ctx and ctx.sources then
+      ctx.sources[abs_path] = file_entry
+    end
+  end
+
+  local lines = file_entry.lines
+  local total_lines = file_entry.total_lines
+  local fence_lang = file_entry.fence_lang
+  local lang_to_use = file_entry.lang_to_use
+  local scratch_buf = file_entry.scratch_buf
+  local ts_parser = file_entry.ts_parser
 
   local extracted = nil
 
   -- Attempt Tree-sitter extraction
-  if vim.treesitter and vim.treesitter.get_parser then
-    local scratch_buf = nil
-    local owns_scratch = false
-
-    if src.bufnr then
-      scratch_buf = src.bufnr
-    else
-      scratch_buf = vim.api.nvim_create_buf(false, true)
-      owns_scratch = true
-      pcall(vim.api.nvim_buf_set_lines, scratch_buf, 0, -1, false, lines)
-    end
-
-    local ok_lang, parser_lang = pcall(function()
-      local ft = vim.filetype.match({ filename = abs_path, buf = scratch_buf })
-      return ft or fence_lang
-    end)
-    local lang_to_use = (ok_lang and parser_lang and parser_lang ~= "") and parser_lang or fence_lang
-
-    local ok_parser, ts_parser = pcall(vim.treesitter.get_parser, scratch_buf, lang_to_use)
-    if ok_parser and ts_parser then
-      pcall(function() ts_parser:parse() end)
+  if scratch_buf and ts_parser then
       local ts_row = math.max(0, (target_line or 1) - 1)
-      local ts_col = 0
+      local target_line_text = lines[ts_row + 1] or ""
+      local line_len = #target_line_text
 
-      local node = nil
-      if vim.treesitter.get_node then
-        local ok_node, n = pcall(vim.treesitter.get_node, {
-          bufnr = scratch_buf,
-          pos = { ts_row, ts_col },
-        })
-        if ok_node then
-          node = n
+      -- Compute candidate 0-indexed byte columns
+      local first_non_ws_byte = target_line_text:find("%S")
+      local fallback_col = first_non_ws_byte and (first_non_ws_byte - 1) or 0
+
+      local raw_col = opts.column or opts.col
+      local primary_col = nil
+      if type(raw_col) == "number" and raw_col >= 1 then
+        primary_col = math.floor(raw_col) - 1
+        if primary_col < 0 or primary_col >= line_len then
+          primary_col = nil
         end
       end
 
-      -- Ascend AST: if inside a block or closure, continue ascending to find
-      -- enclosing method or function (especially vital for Ruby block frames)
-      local current = node
-      while current do
-        if location.is_function_node(lang_to_use, current) then
-          local s_row, _, e_row, _ = current:range()
-          local extracted_name = location.get_function_name(lang_to_use, current, scratch_buf) or method_hint or "anonymous"
-          local method_slice = vim.api.nvim_buf_get_lines(scratch_buf, s_row, e_row + 1, false)
+      local function find_enclosing_function_at(col)
+        if not vim.treesitter.get_node then return nil end
+        local ok_node, n = pcall(vim.treesitter.get_node, {
+          bufnr = scratch_buf,
+          pos = { ts_row, col },
+        })
+        if not ok_node or not n then return nil end
+        local cur = n
+        while cur do
+          if location.is_function_node(lang_to_use, cur) then
+            return cur
+          end
+          cur = cur:parent()
+        end
+        return nil
+      end
+
+      local func_node = nil
+      if primary_col then
+        func_node = find_enclosing_function_at(primary_col)
+      end
+      if not func_node then
+        func_node = find_enclosing_function_at(fallback_col)
+      end
+      if not func_node and primary_col ~= 0 and fallback_col ~= 0 and line_len > 0 then
+        func_node = find_enclosing_function_at(0)
+      end
+
+      if func_node then
+        local s_row, s_col, e_row, e_col = func_node:range()
+        local method_cache_key = string.format("%s:%d:%d", abs_path, s_row, e_row)
+        if ctx and ctx.methods and ctx.methods[method_cache_key] then
+          extracted = ctx.methods[method_cache_key]
+        else
+          local end_exclusive = (e_col == 0 and e_row > s_row) and e_row or (e_row + 1)
+          local method_slice = vim.api.nvim_buf_get_lines(scratch_buf, s_row, end_exclusive, false)
+          local extracted_name = location.get_function_name(lang_to_use, func_node, scratch_buf) or method_hint or "anonymous"
 
           local warning = nil
           if M.methods_disagree(method_hint, extracted_name) then
@@ -224,23 +323,22 @@ function M.extract(abs_path, target_line, opts)
             code = table.concat(method_slice, "\n"),
             lang = fence_lang,
             start_line = s_row + 1,
-            end_line = e_row + 1,
+            end_line = s_row + #method_slice,
             trace_line = target_line,
-            source_type = src.source_type,
-            truncated = false,
+            source_type = file_entry.source_type,
             incomplete = false,
             warning = warning,
           }
-          break
+          if ctx and ctx.methods then
+            ctx.methods[method_cache_key] = extracted
+          end
         end
-        current = current:parent()
       end
     end
 
-    if owns_scratch and scratch_buf then
+    if not ctx and file_entry.owns_scratch and scratch_buf then
       pcall(vim.api.nvim_buf_delete, scratch_buf, { force = true })
     end
-  end
 
   if extracted then
     return extracted
@@ -269,8 +367,7 @@ function M.extract(abs_path, target_line, opts)
       start_line = s_idx,
       end_line = e_idx,
       trace_line = target_line,
-      source_type = src.source_type,
-      truncated = false,
+      source_type = file_entry.source_type,
       incomplete = true,
       warning = "Tree-sitter parser or enclosing method not found; extracted source excerpt",
     }

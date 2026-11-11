@@ -284,12 +284,13 @@ function M.save(root, sessions)
   vim.fn.mkdir(state_dir, "p")
 
   local serialized_sessions = {}
+  local staged_sizes = {}
   for _, s in ipairs(sessions or {}) do
     if s.saved and s.name then
       local serialized = M.serialize_session(s)
       local ok_enc, encoded = pcall(vim.json.encode, serialized)
       if ok_enc and encoded then
-        s._persisted_size = #encoded
+        staged_sizes[s] = #encoded
       end
       table.insert(serialized_sessions, serialized)
     end
@@ -330,6 +331,11 @@ function M.save(root, sessions)
     pcall(os.remove, tmp_path)
     vim.notify("Unwind: Failed to atomically save session state: " .. tostring(err), vim.log.levels.ERROR)
     return false
+  end
+
+  -- Only commit staged persisted sizes after atomic disk write succeeds
+  for s, sz in pairs(staged_sizes) do
+    s._persisted_size = sz
   end
 
   return true

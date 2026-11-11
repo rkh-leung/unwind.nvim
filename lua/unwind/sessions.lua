@@ -141,8 +141,6 @@ local function mutate(session, apply, session_list)
 
   local undo = apply(session)
   session.updated_at = os.time()
-  session._approx_size = nil
-  session._project_frames = nil
 
   if session.name and session.saved and session_list then
     local ok = persistence.save(session.root, session_list)
@@ -160,10 +158,12 @@ local function mutate(session, apply, session_list)
   return true, nil
 end
 
---- Get the session size in bytes and whether it is an exact persisted size
+--- Get the session size in bytes and whether it is an exact persisted size.
+--- Session size measures the serialized JSON metadata size of the session itself,
+--- not the size of referenced source files or generated Markdown exports.
 ---@param session table
 ---@return number bytes
----@return boolean is_exact
+---@return boolean is_exact True if size is from successfully committed on-disk persistence
 function M.get_size(session)
   if not session then
     return 0, false
@@ -171,54 +171,52 @@ function M.get_size(session)
   if session.saved and session._persisted_size then
     return session._persisted_size, true
   end
-  if session.saved then
-    local serialized = persistence.serialize_session(session)
-    local ok_enc, encoded = pcall(vim.json.encode, serialized)
-    if ok_enc and encoded then
-      session._persisted_size = #encoded
-      return session._persisted_size, true
-    end
-  end
-  if session._approx_size then
-    return session._approx_size, false
-  end
+  -- For transient, unsaved, or saved sessions that have not yet been successfully persisted:
+  -- Report serialized metadata size as an uncommitted estimate (is_exact = false).
   local serialized = persistence.serialize_session(session)
   local ok_enc, encoded = pcall(vim.json.encode, serialized)
   if ok_enc and encoded then
-    session._approx_size = #encoded
-    return session._approx_size, false
+    return #encoded, false
   end
   return 0, false
 end
 
---- Get the number of project/codebase frames in session
+--- Get the number of project/codebase frames in session.
+--- Uses authoritative collector.is_vendor_or_ignored classification semantics,
+--- respecting the session's own root.
+--- Computed dynamically to prevent stale cached counts across config/metadata changes.
 ---@param session table
----@param root? string
+---@param root? string Optional override (defaults to session.root or current root)
 ---@param ignore_patterns? string[]
 ---@return number count
 function M.get_project_frame_count(session, root, ignore_patterns)
   if not session or not session.raw_frames then
     return 0
   end
-  if session._project_frames ~= nil then
-    return session._project_frames
-  end
   local collector = require("unwind.collector")
-  root = root or session.root or vim.fs.normalize(vim.fn.getcwd())
+  local sess_root = session.root or root or vim.fs.normalize(vim.fn.getcwd())
   local count = 0
   for _, f in ipairs(session.raw_frames) do
-    if f.external == false then
-      count = count + 1
-    elseif f.external == true then
-      -- not project
+    local is_vendor = false
+    if f.external == true then
+      is_vendor = true
+    elseif f.external == false then
+      is_vendor = false
     else
-      local loc = f.resolved_path or f.file or f.path
-      if not collector.is_vendor_or_ignored(loc, ignore_patterns, root) then
-        count = count + 1
+      local target_loc = f.resolved_path or f.file
+      if collector.is_vendor_or_ignored(target_loc, ignore_patterns, sess_root) then
+        is_vendor = true
+      elseif f.resolved_path then
+        is_vendor = false
+      elseif collector.is_vendor_or_ignored(f.file, ignore_patterns, sess_root) or collector.is_vendor_or_ignored(f.path, ignore_patterns, sess_root) then
+        is_vendor = true
       end
     end
+
+    if not is_vendor then
+      count = count + 1
+    end
   end
-  session._project_frames = count
   return count
 end
 

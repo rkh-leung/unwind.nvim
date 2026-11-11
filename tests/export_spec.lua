@@ -169,24 +169,34 @@ do
   })
   unwind.activate_session(sess)
 
-  -- Export to buffer while filtered
+  -- Open a split window to keep the export buffer visible while navigating in source window
+  local export_win = vim.api.nvim_open_win(vim.api.nvim_create_buf(false, true), true, {
+    relative = "editor", width = 80, height = 20, row = 0, col = 0
+  })
   local bufnr = export.export_to_buffer(sess)
   assert_true(bufnr > 0, "export buffer created")
+  vim.api.nvim_win_set_buf(export_win, bufnr)
+
   local snap_lines_before = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
   local snap_text_before = table.concat(snap_lines_before, "\n")
   assert_true(snap_text_before:find("Filter: Filtered — project source only") ~= nil)
   assert_true(snap_text_before:find("vendor_helper") == nil)
 
-  -- Toggle filter to disabled afterward
+  -- Toggle filter to disabled afterward (navigates in source window)
   unwind.toggle_filter()
   assert_eq(sess.filter_enabled, false, "filter now disabled")
 
-  -- Check existing buffer: must remain completely unchanged
+  -- Check existing buffer: must remain completely unchanged while visible
+  assert_true(vim.api.nvim_buf_is_valid(bufnr), "export buffer remains valid while visible")
   local snap_lines_after = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
   local snap_text_after = table.concat(snap_lines_after, "\n")
   assert_eq(snap_text_before, snap_text_after, "existing export buffer snapshot is immutable to subsequent filter toggle")
 
-  pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+  if vim.api.nvim_win_is_valid(export_win) then
+    vim.api.nvim_win_close(export_win, true)
+  end
+  assert_true(not vim.api.nvim_buf_is_valid(bufnr), "abandoning/closing export buffer releases its resources via bufhidden=wipe")
+  unwind.clear()
 end
 
 print("--> [Export Spec 5] Remote deployment path mapped into local project is classified correctly...")
@@ -324,7 +334,7 @@ do
   assert_true(full_text:find("local v1 = 1") ~= nil, "start of method present")
   assert_true(full_text:find("local v450 = 450") ~= nil, "end of method past 400 lines present")
   assert_true(full_text:find("truncated") == nil, "no truncation string in document")
-  assert_eq(res.manifest.extracted_methods[1].truncated, false, "manifest records not truncated")
+  assert_eq(res.manifest.extracted_methods[1].incomplete, false, "manifest records method is complete")
   assert_eq(res.manifest.extracted_methods[1].end_line - res.manifest.extracted_methods[1].start_line + 1, 453, "full line span extracted")
 end
 
@@ -478,6 +488,113 @@ do
   end
 
   unwind.clear()
+end
+
+print("--> [Export Spec 14] Size exactness near unit boundaries and binary unit formatting...")
+do
+  unwind.clear()
+  local text_util = require("unwind.text")
+
+  -- Format bytes binary unit assertions
+  assert_eq(text_util.format_bytes(0), "0 B")
+  assert_eq(text_util.format_bytes(512), "512 B")
+  assert_eq(text_util.format_bytes(1024), "1.0 KiB")
+  assert_eq(text_util.format_bytes(1024 * 1024), "1.00 MiB")
+  assert_eq(text_util.format_bytes(1024 * 1024 * 1024), "1.00 GiB")
+
+  -- Create a file of exact size near 1 KiB
+  local bound_file = test_root .. "/app/boundary.lua"
+  local f = io.open(bound_file, "w")
+  f:write("local function bound_fn()\n" .. string.rep("  -- pad\n", 40) .. "  return 0\nend\nreturn bound_fn\n")
+  f:close()
+
+  local sess = sessions.create({
+    root = test_root,
+    name = "Boundary Session",
+    transient = true,
+    filter_enabled = false,
+    frames = {
+      { file = "app/boundary.lua", line = 2, method = "bound_fn" },
+    },
+  })
+  unwind.activate_session(sess)
+
+  local res = export.build(sess)
+  local full_text = table.concat(res.lines, "\n")
+  assert_eq(res.manifest.export_bytes, #full_text, "exact match near 1 KiB")
+  assert_true(full_text:find(string.format("Export size: %d bytes", #full_text)) ~= nil)
+  assert_true(res.manifest.export_size:find("KiB") ~= nil, "human readable size uses KiB")
+end
+
+print("--> [Export Spec 15] Unique export buffer naming and independent buffers...")
+do
+  unwind.clear()
+  local sess = sessions.create({
+    root = test_root,
+    name = "Unique Naming Session",
+    transient = true,
+    filter_enabled = false,
+    frames = {
+      { file = "app/models/user.lua", line = 2, method = "find_user" },
+    },
+  })
+  unwind.activate_session(sess)
+
+  local b1 = export.export_to_buffer(sess)
+  assert_true(b1 > 0)
+  local name1 = vim.api.nvim_buf_get_name(b1)
+  assert_true(name1:find("^unwind://export/") ~= nil, "follows unwind://export/ schema")
+
+  -- Open split so b1 remains visible
+  vim.cmd("split")
+  local b2 = export.export_to_buffer(sess)
+  assert_true(b2 > 0)
+  local name2 = vim.api.nvim_buf_get_name(b2)
+
+  assert_true(b1 ~= b2, "two distinct buffer handles")
+  assert_true(name1 ~= name2, "two distinct unique buffer names")
+
+  -- Both buffers are independent
+  vim.api.nvim_buf_set_lines(b1, 0, 1, false, { "# Modified In B1" })
+  local lines_b2 = vim.api.nvim_buf_get_lines(b2, 0, 1, false)
+  assert_true(lines_b2[1] ~= "# Modified In B1", "b2 is independent of modifications to b1")
+
+  pcall(vim.api.nvim_buf_delete, b1, { force = true })
+  pcall(vim.api.nvim_buf_delete, b2, { force = true })
+  unwind.clear()
+end
+
+print("--> [Export Spec 16] Per-export extraction context reuses source & parser across 100 frames...")
+do
+  unwind.clear()
+  -- Build a session with 100 frames all pointing into the same file/method
+  local frames = {}
+  for i = 1, 100 do
+    table.insert(frames, { file = "app/models/user.lua", line = 2, method = "find_user" })
+  end
+
+  local sess = sessions.create({
+    root = test_root,
+    name = "Hundred Frames Session",
+    transient = true,
+    filter_enabled = false,
+    frames = frames,
+  })
+  unwind.activate_session(sess)
+
+  local bufs_before = #vim.api.nvim_list_bufs()
+  local res = export.build(sess)
+  local bufs_after = #vim.api.nvim_list_bufs()
+
+  -- Deduplication works: 100 frames result in 1 unique method extracted
+  assert_eq(#res.manifest.extracted_methods, 1, "exactly 1 unique method extracted")
+  assert_eq(bufs_before, bufs_after, "all temporary parser buffers cleaned up by context dispose")
+
+  local full_text = table.concat(res.lines, "\n")
+  assert_eq(res.manifest.export_bytes, #full_text, "export size exact for 100-frame trace")
+  assert_true(full_text:find("Unique methods extracted: 1") ~= nil)
+  assert_true(full_text:find("Frames in session: 100") ~= nil)
+  assert_true(full_text:find("Frames included: 100") ~= nil)
 end
 
 isolated.cleanup()
