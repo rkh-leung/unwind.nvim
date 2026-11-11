@@ -20,9 +20,17 @@ local sessions = require("unwind.sessions")
 
 print("--> [Isolation Spec] Verifying persistence isolation from user state...")
 do
-  -- Create a sentinel session under a mocked non-test root in a controlled location
-  local sentinel_root = "/tmp/unwind_sentinel_project_root"
+  local test_env = require("tests.helpers.environment")
+  -- Establish isolated test environment FIRST before touching any paths
+  local isolated = test_env.setup_isolated_env()
+  local sentinel_root = test_env.create_temp_dir("sentinel_root_")
+  local test_root = test_env.create_temp_dir("active_test_root_")
+
+  -- Verify all persistence paths resolve strictly inside the isolated state directory
   local sentinel_file, sentinel_dir = persistence.storage_path(sentinel_root)
+  local norm_state_dir = vim.fs.normalize(isolated.state_dir)
+  assert_true(vim.startswith(sentinel_dir, norm_state_dir), "storage path resolves inside isolated state dir")
+
   vim.fn.mkdir(sentinel_dir, "p")
 
   local sentinel_data = {
@@ -61,17 +69,10 @@ do
   f_read:close()
 
   -- Perform session operations in test
-  local test_env = require("tests.helpers.environment")
-  local isolated = test_env.setup_isolated_env()
-  local test_root = test_env.create_temp_dir("isolation_test_")
-
   local s = sessions.create({ root = test_root, name = "Test Session" })
   sessions.add_frame(s, { file = "test.lua", line = 1, origin = "manual" })
   local list = {}
   sessions.save_working(s, "Test Session", list, test_root)
-
-  isolated.cleanup()
-  test_env.cleanup_all()
 
   -- Verify sentinel file is completely untouched
   local post_stat = (vim.uv or vim.loop).fs_stat(sentinel_file)
@@ -84,7 +85,8 @@ do
   assert_eq(post_content, initial_content, "sentinel content unchanged")
   assert_eq(post_stat.size, initial_stat.size, "sentinel size unchanged")
 
-  pcall(os.remove, sentinel_file)
+  isolated.cleanup()
+  test_env.cleanup_all()
 end
 
 print("Isolation spec tests PASSED successfully!")

@@ -59,17 +59,25 @@ function M.setup_isolated_env()
 end
 
 --- Recursively remove a temporary directory created by tests
---- Refuses to remove paths not in temporary directories
+--- Uses strict ownership tracking: only permits deletion of registered directories
 ---@param path string
 function M.cleanup_dir(path)
   if not path or path == "" then return end
   local norm = vim.fs.normalize(path)
-  -- Safety check: only clean up paths under /tmp or standard temp locations
-  local is_temp = norm:match("^/tmp/") or norm:match("^/var/tmp/") or norm:match("unwind_test_")
-  if not is_temp then
-    error("Safety violation: refusing to delete non-temporary directory: " .. norm)
+
+  local found_idx = nil
+  for idx, dir in ipairs(created_dirs) do
+    if vim.fs.normalize(dir) == norm then
+      found_idx = idx
+      break
+    end
   end
 
+  if not found_idx then
+    error("Safety violation: refusing to delete unowned directory: " .. norm)
+  end
+
+  table.remove(created_dirs, found_idx)
   if vim.fn.delete then
     vim.fn.delete(norm, "rf")
   end
@@ -77,7 +85,11 @@ end
 
 --- Cleanup all tracked temporary directories created during this test process
 function M.cleanup_all()
-  for _, dir in ipairs(created_dirs) do
+  local to_clean = {}
+  for _, d in ipairs(created_dirs) do
+    table.insert(to_clean, d)
+  end
+  for _, dir in ipairs(to_clean) do
     pcall(M.cleanup_dir, dir)
   end
   created_dirs = {}

@@ -91,7 +91,7 @@ do
   assert_true(persistence.is_corrupted(test_root))
 end
 
-print("--> [Persistence Val 6] Invalid frame entries and missing path...")
+print("--> [Persistence Val 6] Invalid frame entries fail load and protect data from overwrite...")
 do
   local payload = {
     schema_version = 1,
@@ -108,14 +108,56 @@ do
       },
     },
   }
-  write_raw(vim.json.encode(payload))
+  local encoded_raw = vim.json.encode(payload)
+  write_raw(encoded_raw)
   local loaded = persistence.load(test_root)
-  assert_eq(#loaded, 1)
-  -- The one valid frame should be sanitized and loaded
-  assert_eq(#loaded[1].raw_frames, 1)
-  assert_eq(loaded[1].raw_frames[1].file, "valid.lua")
-  assert_eq(loaded[1].raw_frames[1].line, 1, "invalid line fell back to 1")
-  assert_eq(loaded[1].raw_frames[1].note, "hello", "trimmed note")
+  assert_eq(#loaded, 0, "malformed frame fails load entirely to prevent data loss")
+  assert_true(persistence.is_corrupted(test_root), "flagged as corrupt")
+
+  -- Subsequent save is refused
+  local saved_ok = persistence.save(test_root, {})
+  assert_eq(saved_ok, false, "refuses to overwrite corrupted file")
+
+  -- Verify original file bytes remain intact
+  local f = io.open(storage_file, "r")
+  local bytes = f:read("*all")
+  f:close()
+  assert_eq(bytes, encoded_raw, "original file bytes preserved")
+end
+
+print("--> [Persistence Val 6b] Root mismatch fails closed and protects data from overwrite...")
+do
+  local foreign_root = "/another/foreign/project"
+  local payload = {
+    schema_version = 1,
+    root = foreign_root,
+    sessions = {
+      {
+        id = "s1",
+        name = "Foreign Root Session",
+        frames = {
+          { file = "main.py", line = 10 },
+        },
+      },
+    },
+  }
+  local encoded_raw = vim.json.encode(payload)
+  write_raw(encoded_raw)
+
+  -- Loading under test_root should detect root mismatch, fail load, and flag corruption
+  local loaded = persistence.load(test_root)
+  assert_eq(#loaded, 0)
+  assert_true(persistence.is_corrupted(test_root), "root mismatch flagged as corrupt")
+
+  -- Save attempt under test_root must be blocked
+  local saved_ok = persistence.save(test_root, {})
+  assert_eq(saved_ok, false, "refused to overwrite foreign root state")
+
+  -- Verify original file bytes intact
+  local f = io.open(storage_file, "r")
+  local bytes = f:read("*all")
+  f:close()
+  assert_eq(bytes, encoded_raw, "foreign root file bytes preserved")
 end
 
 print("--> [Persistence Val 7] Unsupported future schema versions...")

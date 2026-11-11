@@ -38,7 +38,8 @@ for test_file in ${TEST_FILES}; do
   TOTAL=$((TOTAL + 1))
   echo ""
   echo "--- Running: ${test_file} ---"
-  if nvim --headless -u NONE -c "set rtp+=." -c "luafile ${test_file}" -c "qa!"; then
+  # Use lua script wrapper to ensure assertion failures or Lua errors exit Neovim with :cquit 1
+  if nvim --headless -u NONE -c "set rtp+=." -c "lua local ok, err = pcall(dofile, '${test_file}'); if not ok then print('ERROR: ' .. tostring(err)); vim.cmd('cquit 1') else vim.cmd('qa!') end"; then
     echo "PASS: ${test_file}"
     PASSED=$((PASSED + 1))
   else

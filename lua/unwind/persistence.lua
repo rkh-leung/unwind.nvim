@@ -177,13 +177,15 @@ function M.load(root)
     return {}
   end
 
-  -- Validate root matching
+  -- Validate root matching: Root mismatch indicates wrong state or foreign root; fail closed!
   if data.root and type(data.root) == "string" and vim.fs.normalize(data.root) ~= norm_root then
+    M._corrupted_roots[norm_root] = true
+    vim.notify(string.format("Unwind: Persisted file root mismatch (expected %s, got %s) in %s", norm_root, data.root, filepath), vim.log.levels.WARN)
     return {}
   end
 
   -- Validate sessions collection
-  if data.sessions ~= nil and type(data.sessions) ~= "table" then
+  if data.sessions ~= nil and (type(data.sessions) ~= "table" or not vim.tbl_islist(data.sessions)) then
     M._corrupted_roots[norm_root] = true
     vim.notify("Unwind: Corrupt sessions field (expected array) in " .. filepath, vim.log.levels.WARN)
     return {}
@@ -192,53 +194,47 @@ function M.load(root)
   local sessions_list = {}
   local raw_list = data.sessions or {}
 
-  -- Ensure raw_list is an array (not an object with non-numeric keys)
-  if type(raw_list) == "table" then
-    for k, s_data in pairs(raw_list) do
-      if type(k) ~= "number" then
+  for s_idx, s_data in ipairs(raw_list) do
+    if type(s_data) ~= "table" or type(s_data.name) ~= "string" or vim.trim(s_data.name) == "" then
+      M._corrupted_roots[norm_root] = true
+      vim.notify("Unwind: Malformed session entry in " .. filepath, vim.log.levels.WARN)
+      return {}
+    end
+
+    local raw_frames = s_data.frames
+    if raw_frames ~= nil and (type(raw_frames) ~= "table" or not vim.tbl_islist(raw_frames)) then
+      M._corrupted_roots[norm_root] = true
+      vim.notify("Unwind: Malformed frames array in session " .. tostring(s_data.name), vim.log.levels.WARN)
+      return {}
+    end
+
+    local frames = {}
+    for _, f in ipairs(raw_frames or {}) do
+      local valid_f = validate_frame(f)
+      if not valid_f then
+        -- Any invalid frame means corrupt data; fail closed to avoid data loss!
         M._corrupted_roots[norm_root] = true
-        vim.notify("Unwind: Malformed sessions collection in " .. filepath, vim.log.levels.WARN)
+        vim.notify("Unwind: Malformed frame in session " .. tostring(s_data.name), vim.log.levels.WARN)
         return {}
       end
-
-      if type(s_data) == "table" and type(s_data.name) == "string" and vim.trim(s_data.name) ~= "" then
-        local frames = {}
-        local raw_frames = s_data.frames
-        if raw_frames ~= nil and type(raw_frames) ~= "table" then
-          M._corrupted_roots[norm_root] = true
-          vim.notify("Unwind: Malformed frames collection in session " .. tostring(s_data.name), vim.log.levels.WARN)
-          return {}
-        end
-
-        for f_idx, f in pairs(raw_frames or {}) do
-          if type(f_idx) ~= "number" then
-            M._corrupted_roots[norm_root] = true
-            vim.notify("Unwind: Malformed frame array in session " .. tostring(s_data.name), vim.log.levels.WARN)
-            return {}
-          end
-          local valid_f = validate_frame(f)
-          if valid_f then
-            table.insert(frames, valid_f)
-          end
-        end
-
-        table.insert(sessions_list, {
-          id = (type(s_data.id) == "string" and s_data.id ~= "") and s_data.id or ("sess_" .. os.time() .. "_" .. #sessions_list),
-          name = vim.trim(s_data.name),
-          transient = false,
-          saved = true,
-          root = norm_root,
-          created_at = tonumber(s_data.created_at) or os.time(),
-          updated_at = tonumber(s_data.updated_at) or os.time(),
-          raw_frames = frames,
-          frames = {},
-          files = {},
-          active_index = 0,
-          active_file_index = 0,
-          filter_enabled = s_data.filter_enabled == true,
-        })
-      end
+      table.insert(frames, valid_f)
     end
+
+    table.insert(sessions_list, {
+      id = (type(s_data.id) == "string" and s_data.id ~= "") and s_data.id or ("sess_" .. os.time() .. "_" .. #sessions_list),
+      name = vim.trim(s_data.name),
+      transient = false,
+      saved = true,
+      root = norm_root,
+      created_at = tonumber(s_data.created_at) or os.time(),
+      updated_at = tonumber(s_data.updated_at) or os.time(),
+      raw_frames = frames,
+      frames = {},
+      files = {},
+      active_index = 0,
+      active_file_index = 0,
+      filter_enabled = s_data.filter_enabled == true,
+    })
   end
 
   -- Successfully decoded and validated
