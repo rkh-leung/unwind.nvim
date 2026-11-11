@@ -285,6 +285,59 @@ do
   unwind.clear()
 end
 
+-- 12. Markdown export: 200 frames across multiple methods
+do
+  local export = require("unwind.export")
+  local export_frames = {}
+  for i = 1, 200 do
+    table.insert(export_frames, {
+      file = "tests/fixtures/dummy.txt",
+      resolved_path = cwd .. "/tests/fixtures/dummy.txt",
+      line = 1,
+      col = 1,
+      method = "step_" .. (i % 10),
+      raw_line = "tests/fixtures/dummy.txt:1",
+    })
+  end
+  local session = sessions.create({
+    root = cwd,
+    name = "Export Bench",
+    transient = true,
+    frames = export_frames,
+  })
+
+  table.insert(results, benchmark("Markdown export build (200 frames)", 10, function()
+    export.build(session)
+  end))
+end
+
+-- 13. End-to-end frame action latency (move + active presentation sync)
+do
+  local actions = require("unwind.session_actions")
+  local action_frames = {}
+  for i = 1, 200 do
+    table.insert(action_frames, {
+      file = "tests/fixtures/dummy.txt",
+      resolved_path = cwd .. "/tests/fixtures/dummy.txt",
+      line = 1,
+      col = 1,
+      method = "action_" .. i,
+      raw_line = "tests/fixtures/dummy.txt:1",
+    })
+  end
+  local session = sessions.create({
+    root = cwd,
+    transient = true,
+    frames = action_frames,
+  })
+  actions.rebuild_derived(session, { ignore_patterns = {} })
+
+  table.insert(results, benchmark("E2E frame reorder action (200 frames)", 20, function()
+    actions.move_frame_in_session(session, 1, 2, nil, { ignore_patterns = {} })
+    actions.move_frame_in_session(session, 2, 1, nil, { ignore_patterns = {} })
+  end))
+end
+
 print("=========================================================================")
 print("Benchmark run complete.")
 print("=========================================================================")

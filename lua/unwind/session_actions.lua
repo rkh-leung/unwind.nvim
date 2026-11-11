@@ -43,19 +43,21 @@ function M.ensure_frames_resolved(session, config, root)
   }
 
   for _, f in ipairs(session.raw_frames) do
-    local orig_path = f.path or f.file
-    local display, resolved, navigable, metadata = parser.resolve_and_normalize_path(orig_path, norm_opts)
-    f.file = display
-    f.resolved_path = resolved
-    f.navigable = navigable
-    if metadata then
-      f.external = metadata.external
-      f.source_kind = metadata.source_kind
-      f.resolution = metadata.resolution
-    else
-      f.external = nil
-      f.source_kind = nil
-      f.resolution = nil
+    if not f.resolved_path then
+      local orig_path = f.path or f.file
+      local display, resolved, navigable, metadata = parser.resolve_and_normalize_path(orig_path, norm_opts)
+      f.file = display
+      f.resolved_path = resolved
+      f.navigable = navigable
+      if metadata then
+        f.external = metadata.external
+        f.source_kind = metadata.source_kind
+        f.resolution = metadata.resolution
+      else
+        f.external = nil
+        f.source_kind = nil
+        f.resolution = nil
+      end
     end
   end
 end
