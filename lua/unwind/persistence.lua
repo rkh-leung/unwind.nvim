@@ -187,31 +187,30 @@ function M.load(root)
     return {}
   end
 
-  -- Validate schema_version
-  if data.schema_version ~= nil and data.schema_version ~= 1 then
+  -- Validate top-level schema v1 requirements:
+  -- schema_version: required and must equal 1
+  if data.schema_version ~= 1 then
     M._corrupted_roots[norm_root] = true
-    vim.notify(string.format("Unwind: Unsupported schema version (%s) in %s", tostring(data.schema_version), filepath), vim.log.levels.WARN)
+    vim.notify(string.format("Unwind: Missing or unsupported schema_version (%s) in %s", tostring(data.schema_version), filepath), vim.log.levels.WARN)
     return {}
   end
 
-  -- Validate root matching: Root mismatch or invalid type indicates wrong state or foreign root; fail closed!
-  if data.root ~= nil then
-    if type(data.root) ~= "string" or vim.fs.normalize(data.root) ~= norm_root then
-      M._corrupted_roots[norm_root] = true
-      vim.notify(string.format("Unwind: Persisted file root mismatch (expected %s, got %s) in %s", norm_root, tostring(data.root), filepath), vim.log.levels.WARN)
-      return {}
-    end
+  -- root: required, must be nonempty string matching normalized root
+  if type(data.root) ~= "string" or vim.trim(data.root) == "" or vim.fs.normalize(data.root) ~= norm_root then
+    M._corrupted_roots[norm_root] = true
+    vim.notify(string.format("Unwind: Missing or mismatched root (%s) in %s", tostring(data.root), filepath), vim.log.levels.WARN)
+    return {}
   end
 
-  -- Validate sessions collection
-  if data.sessions ~= nil and (type(data.sessions) ~= "table" or not is_list(data.sessions)) then
+  -- sessions: required and must be an array (list)
+  if type(data.sessions) ~= "table" or not is_list(data.sessions) then
     M._corrupted_roots[norm_root] = true
-    vim.notify("Unwind: Corrupt sessions field (expected array) in " .. filepath, vim.log.levels.WARN)
+    vim.notify("Unwind: Missing or corrupt sessions field (expected array) in " .. filepath, vim.log.levels.WARN)
     return {}
   end
 
   local sessions_list = {}
-  local raw_list = data.sessions or {}
+  local raw_list = data.sessions
 
   for s_idx, s_data in ipairs(raw_list) do
     if type(s_data) ~= "table" or type(s_data.name) ~= "string" or vim.trim(s_data.name) == "" then
