@@ -132,6 +132,7 @@ unwind.nvim/
   - `:UnwindPrevFile`: Cycles backward directly to the previous unique file (`[f`).
   - `:UnwindToggleFilter`: Toggles vendor / out-of-workspace library filtering while preserving active context.
   - `:UnwindQuickfix`: Exports active stacktrace frames to Neovim's quickfix list.
+  - `:UnwindExport`: Exports active debugging session to a Markdown scratch buffer respecting active filter state.
   - `:UnwindClear`: Clears all extmarks, hides sidebar, and deactivates active session non-destructively.
   - `:UnwindRubyInfo`: Displays diagnostic information about the detected Ruby environment, managers, and gem roots.
   - `:UnwindAnnotate`: Prompts user to annotate the active debugging frame with a note.
@@ -211,4 +212,5 @@ All default leader keymaps follow single-key bindings:
 | Toggle Sidebar | `:UnwindSidebar` | - | Toggle persistent call-trace sidebar |
 | Toggle Filter | `:UnwindToggleFilter` | - | Toggle hiding/showing vendor & external frames |
 | Quickfix Export | `:UnwindQuickfix` | - | Export stack frames to Neovim's quickfix list |
+| Markdown Export | `:UnwindExport` | `E` (sidebar) | Export active debugging session to Markdown buffer |
 | Clear Telemetry | `:UnwindClear` | - | Clear active decorations and deactivate session |

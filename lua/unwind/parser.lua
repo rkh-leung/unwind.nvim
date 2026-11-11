@@ -163,10 +163,15 @@ function M.resolve_and_normalize_path(raw_path, opts)
   end
 
   -- If directly readable as-is, return it immediately
-  if file_exists(raw_path) or file_exists(normalized) then
-    local abs = normalized
-    if normalized:sub(1, 1) ~= "/" and not normalized:match("^%a:[/\\]") then
-      abs = canonicalize_lexical(root .. normalized)
+  local abs_norm = normalized
+  if normalized:sub(1, 1) ~= "/" and not normalized:match("^%a:[/\\]") then
+    abs_norm = canonicalize_lexical(root .. normalized)
+  end
+  if file_exists(raw_path) or file_exists(normalized) or file_exists(abs_norm) then
+    local abs = file_exists(raw_path) and canonicalize_lexical(raw_path)
+      or (file_exists(abs_norm) and abs_norm or normalized)
+    if abs:sub(1, 1) ~= "/" and not abs:match("^%a:[/\\]") then
+      abs = canonicalize_lexical(root .. abs)
     end
     local display = normalized
     if is_in_root then

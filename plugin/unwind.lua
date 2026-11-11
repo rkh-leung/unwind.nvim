@@ -71,6 +71,10 @@ vim.api.nvim_create_user_command("UnwindQuickfix", function()
   require("unwind").quickfix()
 end, { desc = "Export active stacktrace frames to Neovim's quickfix list" })
 
+vim.api.nvim_create_user_command("UnwindExport", function()
+  require("unwind").export()
+end, { desc = "Export active debugging session to Markdown buffer" })
+
 vim.api.nvim_create_user_command("UnwindClear", function()
   require("unwind").clear()
 end, { desc = "Clear active decorations and state" })

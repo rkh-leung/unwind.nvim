@@ -88,6 +88,7 @@ You can start a session from scratch without having a stacktrace at all. Run `:U
 - **Vendor / Gem / Library Filtering**: Automatically tags non-workspace third-party library frames, allowing toggleable filtering on demand (`:UnwindToggleFilter`).
 - **File vs. Frame Cycling**: Instant file-by-file navigation (`]f` / `[f`) alongside detailed frame-by-frame stepping (`]u` / `[u`).
 - **Quickfix Export**: Export all active debugging frames directly to Neovim's quickfix list with `:UnwindQuickfix`.
+- **Markdown Investigation Export**: Export active debugging sessions with complete extracted method bodies, investigation paths, annotations, and filter status to a Markdown scratch buffer (`:UnwindExport` or `E` in sidebar), respecting active frame filtering.
 
 ---
 
@@ -185,6 +186,7 @@ The following table details every supported option in `require("unwind").setup(o
 | `max_input_bytes` | `number` | `2097152` (2 MiB) | Maximum size in bytes of stacktrace text ingested from file or buffer before truncating. |
 | `max_frames` | `number` | `1000` | Maximum number of stack frames retained in memory. For Python tracebacks, the innermost (last N) crash frames are preserved. |
 | `ignore_patterns` | `string[]` | `{"shared/bundle/", "vendor/bundle/", "/gems/", "node_modules/", "^/usr/"}` | Lua patterns used to classify frames as external vendor or third-party code. |
+| `export` | `table` | `{ max_bytes = 2097152, max_method_lines = 400, fallback_context_lines = 10 }` | Configuration options for `:UnwindExport`. |
 | `keymaps` | `table\|false` | See table below | Keymap table for default normal mode bindings, or `false` to disable automatic keybinding registration. |
 | `force_keymaps` | `boolean` | `false` | When `true`, overrides existing non-Unwind keymaps during setup. By default, Unwind respects user mappings and only overrides mappings it owns. |
 
@@ -205,6 +207,7 @@ All leader keymaps follow single-key mappings:
 | Toggle Sidebar | `:UnwindSidebar` | - | Toggle persistent call-trace sidebar |
 | Toggle Filter | `:UnwindToggleFilter` | - | Toggle hiding/showing vendor & external frames |
 | Quickfix Export | `:UnwindQuickfix` | - | Export stack frames to Neovim's quickfix list |
+| Markdown Export | `:UnwindExport` | `E` (sidebar) | Export active debugging session to Markdown buffer |
 | Clear Telemetry | `:UnwindClear` | - | Clear active decorations and deactivate session |
 
 ---
@@ -228,6 +231,7 @@ All leader keymaps follow single-key mappings:
 | `:UnwindPrevFile` | Jumps directly to previous unique file at primary fault line |
 | `:UnwindToggleFilter` | Toggles filtering out vendor / third-party library files |
 | `:UnwindQuickfix` | Exports active stacktrace frames to Neovim's quickfix list |
+| `:UnwindExport` | Exports active debugging session to a Markdown scratch buffer respecting active filter state |
 | `:UnwindClear` | Clears active decorations and deactivates active session |
 | `:UnwindRubyInfo` | Displays diagnostic information about the detected Ruby environment, managers, and gem roots |
 

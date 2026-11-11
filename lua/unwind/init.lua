@@ -12,6 +12,7 @@ local state = require("unwind.state")
 local navigation = require("unwind.navigation")
 local session_actions = require("unwind.session_actions")
 local ingest = require("unwind.ingest")
+local export = require("unwind.export")
 
 local M = {}
 
@@ -30,6 +31,11 @@ M.config = {
     "/gems/",
     "node_modules/",
     "^/usr/",
+  },
+  export = {
+    max_bytes = 2 * 1024 * 1024,
+    max_method_lines = 400,
+    fallback_context_lines = 10,
   },
   keymaps = {
     menu = "<leader>w",
@@ -176,6 +182,10 @@ local function get_sidebar_callbacks(session)
     on_refresh = function()
       M.refresh_availability()
     end,
+    on_export = function()
+      local cur_sess = state.current() or session
+      M.export(cur_sess)
+    end,
   }
 end
 
@@ -309,6 +319,16 @@ end
 --- Export active stacktrace frames to Neovim's quickfix list
 function M.quickfix()
   navigation.quickfix(state.current())
+end
+
+--- Export active debugging session to a Markdown scratch buffer
+---@param session? table Defaults to state.current()
+---@param opts? table Export configuration overrides
+---@return integer bufnr Created buffer handle
+function M.export(session, opts)
+  session = session or state.current()
+  local export_opts = vim.tbl_deep_extend("force", {}, M.config.export or {}, opts or {})
+  return export.export_to_buffer(session, export_opts)
 end
 
 --- Ingest stacktrace from a file path

@@ -179,7 +179,7 @@ function M.render(session)
   table.insert(lines, " enter open   d delete")
   table.insert(lines, " J/K move     e replace")
   table.insert(lines, " a note       s save")
-  table.insert(lines, " q close")
+  table.insert(lines, " E export     q close")
 
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
@@ -403,6 +403,16 @@ function M.open(session, opts)
   vim.keymap.set("n", "r", function()
     if opts.on_refresh then
       opts.on_refresh()
+    end
+  end, key_opts)
+
+  -- E: Export current session to Markdown scratch buffer
+  vim.keymap.set("n", "E", function()
+    if opts.on_export then
+      opts.on_export()
+    else
+      local cur_sess = get_active_session()
+      require("unwind").export(cur_sess)
     end
   end, key_opts)
 
