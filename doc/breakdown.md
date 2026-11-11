@@ -40,7 +40,7 @@ This guide is designed for engineers who are working on `unwind.nvim`. We cover 
 │       ├── navigation.lua  # Buffer navigation, cursor jumping, frame cycling, quickfix export
 │       ├── session_actions.lua # Session modifications, frame mutations, filter reapplication, refresh
 │       ├── sessions.lua    # Session domain model and transactional mutation API
-│       ├── export.lua      # Markdown export generator respecting active session filtering
+│       ├── export.lua      # Markdown export generator respecting active session filtering with accurate size reporting
 │       ├── source_extract.lua # Tree-sitter AST method extraction and fallback excerpt reader
 │       ├── persistence.lua # Atomic state serialization and disk persistence with structural validation
 │       ├── events.lua      # Event bus for session lifecycle notifications

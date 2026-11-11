@@ -141,6 +141,8 @@ local function mutate(session, apply, session_list)
 
   local undo = apply(session)
   session.updated_at = os.time()
+  session._approx_size = nil
+  session._project_frames = nil
 
   if session.name and session.saved and session_list then
     local ok = persistence.save(session.root, session_list)
@@ -156,6 +158,68 @@ local function mutate(session, apply, session_list)
 
   events.emit("session_changed", session)
   return true, nil
+end
+
+--- Get the session size in bytes and whether it is an exact persisted size
+---@param session table
+---@return number bytes
+---@return boolean is_exact
+function M.get_size(session)
+  if not session then
+    return 0, false
+  end
+  if session.saved and session._persisted_size then
+    return session._persisted_size, true
+  end
+  if session.saved then
+    local serialized = persistence.serialize_session(session)
+    local ok_enc, encoded = pcall(vim.json.encode, serialized)
+    if ok_enc and encoded then
+      session._persisted_size = #encoded
+      return session._persisted_size, true
+    end
+  end
+  if session._approx_size then
+    return session._approx_size, false
+  end
+  local serialized = persistence.serialize_session(session)
+  local ok_enc, encoded = pcall(vim.json.encode, serialized)
+  if ok_enc and encoded then
+    session._approx_size = #encoded
+    return session._approx_size, false
+  end
+  return 0, false
+end
+
+--- Get the number of project/codebase frames in session
+---@param session table
+---@param root? string
+---@param ignore_patterns? string[]
+---@return number count
+function M.get_project_frame_count(session, root, ignore_patterns)
+  if not session or not session.raw_frames then
+    return 0
+  end
+  if session._project_frames ~= nil then
+    return session._project_frames
+  end
+  local collector = require("unwind.collector")
+  root = root or session.root or vim.fs.normalize(vim.fn.getcwd())
+  local count = 0
+  for _, f in ipairs(session.raw_frames) do
+    if f.external == false then
+      count = count + 1
+    elseif f.external == true then
+      -- not project
+    else
+      local loc = f.resolved_path or f.file or f.path
+      if not collector.is_vendor_or_ignored(loc, ignore_patterns, root) then
+        count = count + 1
+      end
+    end
+  end
+  session._project_frames = count
+  return count
 end
 
 --- Add a single frame to a session
@@ -402,8 +466,10 @@ function M.delete(session, sessions, root)
   table.remove(sessions, target_idx)
   local old_saved = session.saved
   local old_transient = session.transient
+  local old_persisted_size = session._persisted_size
   session.saved = false
   session.transient = true
+  session._persisted_size = nil
 
   local ok = M.save(root, sessions)
   if not ok then
@@ -411,6 +477,7 @@ function M.delete(session, sessions, root)
     table.insert(sessions, target_idx, session)
     session.saved = old_saved
     session.transient = old_transient
+    session._persisted_size = old_persisted_size
     return false
   end
 

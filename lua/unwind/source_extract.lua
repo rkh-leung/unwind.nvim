@@ -138,7 +138,7 @@ end
 --- Extract enclosing method or context excerpt for a frame
 ---@param abs_path string
 ---@param target_line number
----@param opts? { method_hint?: string, max_method_lines?: number, fallback_context_lines?: number }
+---@param opts? { method_hint?: string, fallback_context_lines?: number }
 ---@return {
 ---   kind: "method"|"excerpt",
 ---   name: string,
@@ -149,12 +149,12 @@ end
 ---   trace_line: number,
 ---   source_type: string,
 ---   truncated: boolean,
+---   incomplete?: boolean,
 ---   warning?: string
 --- }|nil
 function M.extract(abs_path, target_line, opts)
   opts = opts or {}
   local method_hint = opts.method_hint
-  local max_method_lines = opts.max_method_lines or 400
   local fallback_lines_count = opts.fallback_context_lines or 10
 
   local src = M.read_source(abs_path)
@@ -213,23 +213,9 @@ function M.extract(abs_path, target_line, opts)
           local extracted_name = location.get_function_name(lang_to_use, current, scratch_buf) or method_hint or "anonymous"
           local method_slice = vim.api.nvim_buf_get_lines(scratch_buf, s_row, e_row + 1, false)
 
-          local is_truncated = false
           local warning = nil
-
-          if #method_slice > max_method_lines then
-            is_truncated = true
-            local keep_slice = {}
-            for i = 1, max_method_lines do
-              table.insert(keep_slice, method_slice[i])
-            end
-            table.insert(keep_slice, string.format("... [truncated %d lines exceeding max_method_lines limit]", #method_slice - max_method_lines))
-            method_slice = keep_slice
-            warning = string.format("Method truncated: %d lines exceeded limit of %d", #method_slice, max_method_lines)
-          end
-
           if M.methods_disagree(method_hint, extracted_name) then
-            local mismatch_warn = string.format("Extracted method '%s' differs from trace method '%s'", extracted_name, method_hint)
-            warning = warning and (warning .. "; " .. mismatch_warn) or mismatch_warn
+            warning = string.format("Extracted method '%s' differs from trace method '%s'", extracted_name, method_hint)
           end
 
           extracted = {
@@ -241,7 +227,8 @@ function M.extract(abs_path, target_line, opts)
             end_line = e_row + 1,
             trace_line = target_line,
             source_type = src.source_type,
-            truncated = is_truncated,
+            truncated = false,
+            incomplete = false,
             warning = warning,
           }
           break
@@ -284,6 +271,7 @@ function M.extract(abs_path, target_line, opts)
       trace_line = target_line,
       source_type = src.source_type,
       truncated = false,
+      incomplete = true,
       warning = "Tree-sitter parser or enclosing method not found; extracted source excerpt",
     }
   end

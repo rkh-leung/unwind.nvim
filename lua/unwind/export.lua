@@ -8,10 +8,8 @@ local sidebar = require("unwind.sidebar")
 
 local M = {}
 
---- Default export configuration limits
+--- Default export configuration options
 M.defaults = {
-  max_bytes = 2 * 1024 * 1024,
-  max_method_lines = 400,
   fallback_context_lines = 10,
 }
 
@@ -80,7 +78,9 @@ function M.build(session, opts)
     excluded_frames = excluded_count,
     extracted_methods = {},
     unavailable_sources = 0,
-    truncated_methods = 0,
+    incomplete_extractions = 0,
+    export_bytes = 0,
+    export_size = "",
   }
 
   local lines = {}
@@ -129,7 +129,6 @@ function M.build(session, opts)
     else
       local extracted = source_extract.extract(abs_target, frame.line, {
         method_hint = frame.method,
-        max_method_lines = opts.max_method_lines,
         fallback_context_lines = opts.fallback_context_lines,
       })
 
@@ -141,9 +140,6 @@ function M.build(session, opts)
         if extracted.warning then
           table.insert(warnings, string.format("Frame %d (%s): %s", frame.raw_index or idx, frame.file or frame.path, extracted.warning))
         end
-        if extracted.truncated then
-          manifest.truncated_methods = manifest.truncated_methods + 1
-        end
 
         local dedup_key = string.format("%s:%d:%d", abs_target, extracted.start_line, extracted.end_line)
         local existing_method_idx = method_dedup_map[dedup_key]
@@ -151,6 +147,10 @@ function M.build(session, opts)
         if existing_method_idx then
           frame_to_method_idx[idx] = existing_method_idx
         else
+          if extracted.kind == "excerpt" or extracted.incomplete then
+            manifest.incomplete_extractions = manifest.incomplete_extractions + 1
+          end
+
           table.insert(method_items, {
             id = #method_items + 1,
             frame_num = frame.raw_index or idx,
@@ -164,7 +164,7 @@ function M.build(session, opts)
             start_line = extracted.start_line,
             end_line = extracted.end_line,
             source_type = extracted.source_type,
-            truncated = extracted.truncated,
+            truncated = extracted.truncated or false,
             warning = extracted.warning,
           })
           local new_method_idx = #method_items
@@ -254,10 +254,10 @@ function M.build(session, opts)
   table.insert(lines, string.format("Frames excluded by filter: %d", excluded_count))
   table.insert(lines, string.format("Unique methods extracted: %d", #method_items))
   table.insert(lines, string.format("Unavailable sources: %d", manifest.unavailable_sources))
+  table.insert(lines, string.format("Incomplete extractions: %d", manifest.incomplete_extractions))
 
-  if manifest.truncated_methods > 0 then
-    table.insert(lines, string.format("Truncated methods: %d", manifest.truncated_methods))
-  end
+  local size_line_idx = #lines + 1
+  table.insert(lines, "") -- placeholder for Export size line
 
   if #warnings > 0 then
     table.insert(lines, "")
@@ -270,16 +270,21 @@ function M.build(session, opts)
 
   manifest.extracted_methods = method_items
 
-  -- Size safeguard
+  -- Measure final generated output and report exact byte count accurately describing finished document
+  local text_util = require("unwind.text")
   local total_output_bytes = 0
-  for _, l in ipairs(lines) do
-    total_output_bytes = total_output_bytes + #l + 1
+  for _ = 1, 10 do
+    local readable = text_util.format_bytes(total_output_bytes)
+    lines[size_line_idx] = string.format("Export size: %d bytes (%s)", total_output_bytes, readable)
+    local doc = table.concat(lines, "\n")
+    if #doc == total_output_bytes then
+      break
+    end
+    total_output_bytes = #doc
   end
 
-  if total_output_bytes > opts.max_bytes then
-    table.insert(warnings, string.format("Total export size (%d bytes) exceeded max_bytes limit of %d bytes", total_output_bytes, opts.max_bytes))
-    table.insert(lines, string.format("> **Warning**: Total export size exceeded max_bytes (%d bytes). Some content may require truncation.", opts.max_bytes))
-  end
+  manifest.export_bytes = total_output_bytes
+  manifest.export_size = text_util.format_bytes(total_output_bytes)
 
   return {
     lines = lines,

@@ -88,7 +88,7 @@ You can start a session from scratch without having a stacktrace at all. Run `:U
 - **Vendor / Gem / Library Filtering**: Automatically tags non-workspace third-party library frames, allowing toggleable filtering on demand (`:UnwindToggleFilter`).
 - **File vs. Frame Cycling**: Instant file-by-file navigation (`]f` / `[f`) alongside detailed frame-by-frame stepping (`]u` / `[u`).
 - **Quickfix Export**: Export all active debugging frames directly to Neovim's quickfix list with `:UnwindQuickfix`.
-- **Markdown Investigation Export**: Export active debugging sessions with complete extracted method bodies, investigation paths, annotations, and filter status to a Markdown scratch buffer (`:UnwindExport` or `E` in sidebar), respecting active frame filtering.
+- **Markdown Investigation Export**: Export active debugging sessions with unrestricted extracted method bodies, investigation paths, annotations, filter status, and accurate byte size reporting to a Markdown scratch buffer (`:UnwindExport` or `E` in sidebar), respecting active frame filtering.
 
 ---
 
@@ -115,21 +115,21 @@ You can start a session from scratch without having a stacktrace at all. Run `:U
 
 ### Unwind Menu (`<leader>w` / `:UnwindMenu`)
 ```text
-┌──────────────────────────────────────────────┐
-│ Unwind                                       │
-│                                              │
-│   + New debugging session                    │
-│   + Import stacktrace from clipboard         │
-│                                              │
-│   Current: Untitled                 3 frames │
-│   Save current session...                    │
-│                                              │
-│ ─ Saved Sessions ─────────────────────────── │
-│   Memory leak                      14 frames │
-│   Login race condition              8 frames │
-│                                              │
-│ Enter open   r rename   d delete             │
-└──────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│ Unwind                                                 │
+│                                                        │
+│   + New debugging session                              │
+│   + Import stacktrace from clipboard                   │
+│                                                        │
+│   Current: Untitled             3 frames (2 project)   │
+│   Save current session...                              │
+│                                                        │
+│ ─ Saved Sessions ───────────────────────────────────── │
+│   Memory leak                  14 frames (10 project)  │
+│   Login race condition          8 frames (8 project)   │
+│                                                        │
+│ Enter open   r rename   d delete                       │
+└────────────────────────────────────────────────────────┘
 ```
 
 ### Call-Trace Sidebar
@@ -186,7 +186,7 @@ The following table details every supported option in `require("unwind").setup(o
 | `max_input_bytes` | `number` | `2097152` (2 MiB) | Maximum size in bytes of stacktrace text ingested from file or buffer before truncating. |
 | `max_frames` | `number` | `1000` | Maximum number of stack frames retained in memory. For Python tracebacks, the innermost (last N) crash frames are preserved. |
 | `ignore_patterns` | `string[]` | `{"shared/bundle/", "vendor/bundle/", "/gems/", "node_modules/", "^/usr/"}` | Lua patterns used to classify frames as external vendor or third-party code. |
-| `export` | `table` | `{ max_bytes = 2097152, max_method_lines = 400, fallback_context_lines = 10 }` | Configuration options for `:UnwindExport`. |
+| `export` | `table` | `{ fallback_context_lines = 10 }` | Configuration options for `:UnwindExport`. |
 | `keymaps` | `table\|false` | See table below | Keymap table for default normal mode bindings, or `false` to disable automatic keybinding registration. |
 | `force_keymaps` | `boolean` | `false` | When `true`, overrides existing non-Unwind keymaps during setup. By default, Unwind respects user mappings and only overrides mappings it owns. |
 

@@ -110,14 +110,14 @@ do
   pcall(vim.fn.delete, temp_dir, "rf")
 end
 
-print("--> [Source Extract 5] Method line truncation...")
+print("--> [Source Extract 5] Methods longer than 400 lines extract completely without truncation...")
 do
   local temp_dir = vim.fn.tempname()
   vim.fn.mkdir(temp_dir, "p")
   local file_path = temp_dir .. "/long.lua"
 
   local lines = { "local function huge_function()" }
-  for i = 1, 50 do
+  for i = 1, 450 do
     table.insert(lines, "  local a" .. i .. " = " .. i)
   end
   table.insert(lines, "  return 0")
@@ -127,12 +127,16 @@ do
   f:write(table.concat(lines, "\n"))
   f:close()
 
-  local ext = source_extract.extract(file_path, 2, { max_method_lines = 10 })
+  local ext = source_extract.extract(file_path, 2)
   assert_true(ext ~= nil, "extracted method")
-  if ext.kind == "method" then
-    assert_true(ext.truncated, "method was truncated")
-    assert_true(ext.code:find("truncated") ~= nil, "includes truncation notice in code")
-  end
+  assert_eq(ext.kind, "method", "extracted as full method")
+  assert_eq(ext.truncated, false, "method is not truncated")
+  assert_eq(ext.incomplete, false, "method is complete")
+  assert_true(ext.code:find("local a1 = 1") ~= nil, "contains beginning lines")
+  assert_true(ext.code:find("local a450 = 450") ~= nil, "contains end lines past 400 lines")
+
+  local line_count = #vim.split(ext.code, "\n", { plain = true })
+  assert_true(line_count >= 452, "all 452 lines of method preserved")
 
   pcall(vim.fn.delete, temp_dir, "rf")
 end

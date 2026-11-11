@@ -40,4 +40,22 @@ function M.truncate_display(text, max_width)
   return text:sub(1, byte_index)
 end
 
+--- Formats byte size into human-readable units (B, KB, MB, GB).
+--- Uses 1024-based binary units with readable precision.
+---@param bytes number
+---@return string
+function M.format_bytes(bytes)
+  if not bytes or bytes <= 0 then
+    return "0 B"
+  elseif bytes < 1024 then
+    return string.format("%d B", bytes)
+  elseif bytes < 1024 * 1024 then
+    return string.format("%.1f KB", bytes / 1024)
+  elseif bytes < 1024 * 1024 * 1024 then
+    return string.format("%.2f MB", bytes / (1024 * 1024))
+  else
+    return string.format("%.2f GB", bytes / (1024 * 1024 * 1024))
+  end
+end
+
 return M

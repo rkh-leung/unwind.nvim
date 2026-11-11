@@ -267,6 +267,20 @@ function M.open_session_manager(items, callbacks)
 
   local strwidth = vim.api.nvim_strwidth or function(s) return #s end
 
+  local function format_session_suffix(it)
+    local count = it.total_frames or it.frame_count or 0
+    local frame_suffix = string.format("%d frame%s", count, count == 1 and "" or "s")
+    if it.project_frames ~= nil and it.size_str ~= nil then
+      return string.format("%s (%d project)  %s", frame_suffix, it.project_frames, it.size_str)
+    elseif it.project_frames ~= nil then
+      return string.format("%s (%d project)", frame_suffix, it.project_frames)
+    elseif it.size_str ~= nil then
+      return string.format("%s  %s", frame_suffix, it.size_str)
+    else
+      return frame_suffix
+    end
+  end
+
   local max_text_len = 0
   for _, it in ipairs(items) do
     local text = ""
@@ -277,11 +291,11 @@ function M.open_session_manager(items, callbacks)
     elseif it.type == "save_action" then
       text = "Save current session..."
     elseif it.type == "current_status" then
-      text = string.format("Current: %s  %d frames", it.name or "Untitled", it.frame_count or 0)
+      text = string.format("Current: %s  %s", it.name or "Untitled", format_session_suffix(it))
     elseif it.type == "separator" then
       text = it.text or "Saved Sessions"
     elseif it.type == "session" then
-      text = (it.name or "") .. "  " .. tostring(it.frame_count or 0) .. " frames"
+      text = (it.name or "") .. "  " .. format_session_suffix(it)
     end
     local w = strwidth(text)
     if w > max_text_len then
@@ -289,7 +303,7 @@ function M.open_session_manager(items, callbacks)
     end
   end
 
-  local target_width = math.max(48, max_text_len + 16)
+  local target_width = math.max(54, max_text_len + 16)
   local max_w = math.max(1, editor_width - 4)
   local max_h = math.max(1, editor_height - 4)
   local win_width = math.max(1, math.min(target_width, max_w))
@@ -307,10 +321,20 @@ function M.open_session_manager(items, callbacks)
       table.insert(lines, "")
     elseif it.type == "current_status" then
       local name = it.name or "Untitled"
-      local count = it.frame_count or 0
-      local suffix = string.format("%d frame%s", count, count == 1 and "" or "s")
+      local suffix = format_session_suffix(it)
+      local suffix_w = strwidth(suffix)
       local label = "Current: " .. name
-      local pad = math.max(2, (win_width - 2) - strwidth(label) - strwidth(suffix) - 2)
+      local label_w = strwidth(label)
+      local max_label_w = (win_width - 2) - suffix_w - 4
+      if label_w > max_label_w and max_label_w > 8 then
+        local trunc = name
+        while strwidth("Current: " .. trunc .. "...") > max_label_w and #trunc > 0 do
+          trunc = trunc:sub(1, -2)
+        end
+        label = "Current: " .. trunc .. "..."
+        label_w = strwidth(label)
+      end
+      local pad = math.max(2, (win_width - 2) - label_w - suffix_w - 2)
       table.insert(lines, "  " .. label .. string.rep(" ", pad) .. suffix)
     elseif it.type == "save_action" then
       table.insert(lines, "  Save current session...")
@@ -321,8 +345,7 @@ function M.open_session_manager(items, callbacks)
       table.insert(lines, sep_line .. string.rep("─", fill))
     else
       local name = it.name or "Untitled"
-      local count = it.frame_count or 0
-      local suffix = string.format("%d frame%s", count, count == 1 and "" or "s")
+      local suffix = format_session_suffix(it)
       local suffix_w = strwidth(suffix)
       local max_name_w = (win_width - 2) - suffix_w - 4
       local name_w = strwidth(name)
@@ -358,12 +381,17 @@ function M.open_session_manager(items, callbacks)
       vim.api.nvim_buf_add_highlight(buf, ns_ui, "Comment", line_idx, 0, -1)
     elseif it.type == "current_status" then
       vim.api.nvim_buf_add_highlight(buf, ns_ui, "Special", line_idx, 0, -1)
+      local line_content = lines[idx]
+      local s = line_content:find("%d+%s+frame")
+      if s then
+        vim.api.nvim_buf_add_highlight(buf, ns_ui, "Comment", line_idx, s - 1, -1)
+      end
     elseif it.type == "session" then
       vim.api.nvim_buf_add_highlight(buf, ns_ui, "Normal", line_idx, 0, -1)
       local line_content = lines[idx]
-      local s, e = line_content:find("%d+%s+frames?")
-      if s and e then
-        vim.api.nvim_buf_add_highlight(buf, ns_ui, "Comment", line_idx, s - 1, e)
+      local s = line_content:find("%d+%s+frame")
+      if s then
+        vim.api.nvim_buf_add_highlight(buf, ns_ui, "Comment", line_idx, s - 1, -1)
       end
     end
   end

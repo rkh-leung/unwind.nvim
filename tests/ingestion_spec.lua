@@ -15,10 +15,16 @@ local function assert_true(val, msg)
   end
 end
 
+local test_env = require("tests.helpers.environment")
+test_env.setup_test_clipboard()
+
+-- Verify that setting and reading the + register round-trips expected text
+vim.fn.setreg("+", "test_ingestion_clipboard_roundtrip\n")
+assert_eq(vim.fn.getreg("+"), "test_ingestion_clipboard_roundtrip\n", "clipboard provider round-trip verified")
+
 local unwind = require("unwind")
 local sidebar = require("unwind.sidebar")
 local state = require("unwind.state")
-local test_env = require("tests.helpers.environment")
 
 local isolated = test_env.setup_isolated_env()
 local test_root = test_env.create_temp_dir("ingestion_spec_root_")

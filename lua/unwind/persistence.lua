@@ -238,6 +238,9 @@ function M.load(root)
       table.insert(frames, valid_f)
     end
 
+    local ok_enc, encoded = pcall(vim.json.encode, s_data)
+    local persisted_size = (ok_enc and encoded) and #encoded or nil
+
     table.insert(sessions_list, {
       id = (type(s_data.id) == "string" and s_data.id ~= "") and s_data.id or ("sess_" .. os.time() .. "_" .. #sessions_list),
       name = vim.trim(s_data.name),
@@ -252,6 +255,7 @@ function M.load(root)
       active_index = 0,
       active_file_index = 0,
       filter_enabled = s_data.filter_enabled == true,
+      _persisted_size = persisted_size,
     })
   end
 
@@ -282,7 +286,12 @@ function M.save(root, sessions)
   local serialized_sessions = {}
   for _, s in ipairs(sessions or {}) do
     if s.saved and s.name then
-      table.insert(serialized_sessions, M.serialize_session(s))
+      local serialized = M.serialize_session(s)
+      local ok_enc, encoded = pcall(vim.json.encode, serialized)
+      if ok_enc and encoded then
+        s._persisted_size = #encoded
+      end
+      table.insert(serialized_sessions, serialized)
     end
   end
 

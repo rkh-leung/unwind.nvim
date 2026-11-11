@@ -15,9 +15,21 @@ local function assert_true(val, msg)
   end
 end
 
+local test_env = require("tests.helpers.environment")
+test_env.setup_test_clipboard()
+
+-- Verify that setting and reading the + register round-trips expected text
+vim.fn.setreg("+", "test_clipboard_roundtrip\n")
+assert_eq(vim.fn.getreg("+"), "test_clipboard_roundtrip\n", "clipboard provider round-trip verified")
+
 local unwind = require("unwind")
 local sessions = require("unwind.sessions")
 local sidebar = require("unwind.sidebar")
+local state = require("unwind.state")
+
+local isolated = test_env.setup_isolated_env()
+local test_root = test_env.create_temp_dir("clipboard_spec_root_")
+state.set_root(test_root)
 
 print("--> [Clipboard Spec 1] Clipboard creates a NEW unnamed transient session...")
 do
@@ -51,13 +63,14 @@ end
 print("--> [Clipboard Spec 2] Clipboard does not mutate saved active session...")
 do
   unwind.clear()
-  local test_root = vim.fs.normalize(vim.fn.getcwd())
-  local storage_file = sessions.storage_path(test_root)
+  local dedicated_root = test_env.create_temp_dir("clipboard_spec_saved_root_")
+  state.set_root(dedicated_root)
+  local storage_file = sessions.storage_path(dedicated_root)
 
   vim.fn.setreg("+", 'File "saved_test.py", line 15, in fn_saved\n')
   local s_saved = unwind.ingest_clipboard()
-  unwind.ensure_sessions_loaded(test_root)
-  sessions.save_working(s_saved, "Preserved Saved Trace", unwind.state.sessions, test_root)
+  unwind.ensure_sessions_loaded(dedicated_root)
+  sessions.save_working(s_saved, "Preserved Saved Trace", unwind.state.sessions, dedicated_root)
 
   -- Ingest another clipboard trace
   vim.fn.setreg("+", 'File "new_trace.py", line 99, in fn_new\n')
@@ -69,9 +82,10 @@ do
   assert_eq(s_saved.raw_frames[1].line, 15, "saved session line intact")
 
   sidebar.hide()
-  sessions.delete(s_saved, unwind.state.sessions, test_root)
+  sessions.delete(s_saved, unwind.state.sessions, dedicated_root)
   pcall(os.remove, storage_file)
   unwind.clear()
+  state.set_root(test_root)
 end
 
 print("--> [Clipboard Spec 3] Empty/invalid clipboard does not destroy current session...")
@@ -96,5 +110,8 @@ do
   sidebar.hide()
   unwind.clear()
 end
+
+isolated.cleanup()
+test_env.cleanup_all()
 
 print("All clipboard spec tests PASSED successfully!")
