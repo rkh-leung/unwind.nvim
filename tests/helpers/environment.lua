@@ -83,6 +83,39 @@ function M.cleanup_dir(path)
   end
 end
 
+--- Set up an in-memory test clipboard provider using Neovim's vim.g.clipboard interface.
+--- Provides copy and paste callbacks for the '+' and '*' registers.
+---@return table store In-memory register storage
+function M.setup_test_clipboard()
+  local store = {
+    ["+"] = { {}, "c" },
+    ["*"] = { {}, "c" },
+  }
+
+  vim.g.clipboard = {
+    name = "test_clipboard",
+    copy = {
+      ["+"] = function(lines, regtype)
+        store["+"] = { lines, regtype }
+      end,
+      ["*"] = function(lines, regtype)
+        store["*"] = { lines, regtype }
+      end,
+    },
+    paste = {
+      ["+"] = function()
+        return store["+"]
+      end,
+      ["*"] = function()
+        return store["*"]
+      end,
+    },
+    cache_enabled = 0,
+  }
+
+  return store
+end
+
 --- Cleanup all tracked temporary directories created during this test process
 function M.cleanup_all()
   local to_clean = {}

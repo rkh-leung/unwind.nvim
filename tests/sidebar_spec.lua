@@ -66,4 +66,27 @@ do
   assert_true(not sidebar.is_open(), "sidebar closed")
 end
 
+print("--> [Sidebar Spec 3] Session-manager Unicode safe truncation and narrow window rendering...")
+do
+  local ui = require("unwind.ui")
+  local items = {
+    { type = "new_session" },
+    { type = "current_status", name = "非常に長いマルチバイトセッション名テスト", total_frames = 10, project_frames = 8, size_str = "2.4 KiB" },
+    { type = "separator", text = "Saved Sessions" },
+    { type = "session", name = "Normal session", total_frames = 5, project_frames = 5, size_str = "850 B" },
+    { type = "session", name = "Emojis 🚀🔥✨ and wide characters 漢字", total_frames = 20, project_frames = 15, size_str = "12.0 KiB" },
+  }
+
+  -- Test in narrow terminal
+  local prev_cols = vim.o.columns
+  vim.o.columns = 40
+
+  ui.open_session_manager(items, {})
+  assert_true(ui.is_floating(), "menu opened in narrow terminal")
+  ui.close()
+  assert_true(not ui.is_floating(), "menu closed cleanly")
+
+  vim.o.columns = prev_cols
+end
+
 print("All sidebar spec tests PASSED successfully!")

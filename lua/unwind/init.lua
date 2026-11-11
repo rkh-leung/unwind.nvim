@@ -13,6 +13,7 @@ local navigation = require("unwind.navigation")
 local session_actions = require("unwind.session_actions")
 local ingest = require("unwind.ingest")
 local export = require("unwind.export")
+local text_util = require("unwind.text")
 
 local M = {}
 
@@ -33,8 +34,6 @@ M.config = {
     "^/usr/",
   },
   export = {
-    max_bytes = 2 * 1024 * 1024,
-    max_method_lines = 400,
     fallback_context_lines = 10,
   },
   keymaps = {
@@ -512,11 +511,24 @@ function M.menu()
 
   local session = state.current()
   if session then
-    local count = session.raw_frames and #session.raw_frames or 0
+    local total_count = session.raw_frames and #session.raw_frames or 0
+    local project_count = sessions.get_project_frame_count(session, root, M.config.ignore_patterns)
+    local sz, is_exact = sessions.get_size(session)
+    local sz_str
+    if is_exact then
+      sz_str = text_util.format_bytes(sz)
+    else
+      sz_str = "approx. " .. text_util.format_bytes(sz)
+    end
     table.insert(items, {
       type = "current_status",
       name = session.name or "Untitled",
-      frame_count = count,
+      frame_count = total_count,
+      total_frames = total_count,
+      project_frames = project_count,
+      size_bytes = sz,
+      size_str = sz_str,
+      is_exact = is_exact,
     })
     if not session.saved then
       table.insert(items, { type = "save_action" })
@@ -527,10 +539,24 @@ function M.menu()
   if #state.raw.sessions > 0 then
     table.insert(items, { type = "separator", text = "Saved Sessions" })
     for _, s in ipairs(state.raw.sessions) do
+      local total_count = s.raw_frames and #s.raw_frames or 0
+      local project_count = sessions.get_project_frame_count(s, root, M.config.ignore_patterns)
+      local sz, is_exact = sessions.get_size(s)
+      local sz_str
+      if is_exact then
+        sz_str = text_util.format_bytes(sz)
+      else
+        sz_str = "approx. " .. text_util.format_bytes(sz)
+      end
       table.insert(items, {
         type = "session",
         name = s.name,
-        frame_count = s.raw_frames and #s.raw_frames or 0,
+        frame_count = total_count,
+        total_frames = total_count,
+        project_frames = project_count,
+        size_bytes = sz,
+        size_str = sz_str,
+        is_exact = is_exact,
         session = s,
       })
     end

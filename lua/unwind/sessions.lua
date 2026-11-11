@@ -158,6 +158,68 @@ local function mutate(session, apply, session_list)
   return true, nil
 end
 
+--- Get the session size in bytes and whether it is an exact persisted size.
+--- Session size measures the serialized JSON metadata size of the session itself,
+--- not the size of referenced source files or generated Markdown exports.
+---@param session table
+---@return number bytes
+---@return boolean is_exact True if size is from successfully committed on-disk persistence
+function M.get_size(session)
+  if not session then
+    return 0, false
+  end
+  if session.saved and session._persisted_size then
+    return session._persisted_size, true
+  end
+  -- For transient, unsaved, or saved sessions that have not yet been successfully persisted:
+  -- Report serialized metadata size as an uncommitted estimate (is_exact = false).
+  local serialized = persistence.serialize_session(session)
+  local ok_enc, encoded = pcall(vim.json.encode, serialized)
+  if ok_enc and encoded then
+    return #encoded, false
+  end
+  return 0, false
+end
+
+--- Get the number of project/codebase frames in session.
+--- Uses authoritative collector.is_vendor_or_ignored classification semantics,
+--- respecting the session's own root.
+--- Computed dynamically to prevent stale cached counts across config/metadata changes.
+---@param session table
+---@param root? string Optional override (defaults to session.root or current root)
+---@param ignore_patterns? string[]
+---@return number count
+function M.get_project_frame_count(session, root, ignore_patterns)
+  if not session or not session.raw_frames then
+    return 0
+  end
+  local collector = require("unwind.collector")
+  local sess_root = session.root or root or vim.fs.normalize(vim.fn.getcwd())
+  local count = 0
+  for _, f in ipairs(session.raw_frames) do
+    local is_vendor = false
+    if f.external == true then
+      is_vendor = true
+    elseif f.external == false then
+      is_vendor = false
+    else
+      local target_loc = f.resolved_path or f.file
+      if collector.is_vendor_or_ignored(target_loc, ignore_patterns, sess_root) then
+        is_vendor = true
+      elseif f.resolved_path then
+        is_vendor = false
+      elseif collector.is_vendor_or_ignored(f.file, ignore_patterns, sess_root) or collector.is_vendor_or_ignored(f.path, ignore_patterns, sess_root) then
+        is_vendor = true
+      end
+    end
+
+    if not is_vendor then
+      count = count + 1
+    end
+  end
+  return count
+end
+
 --- Add a single frame to a session
 ---@param session table
 ---@param frame table
@@ -402,8 +464,10 @@ function M.delete(session, sessions, root)
   table.remove(sessions, target_idx)
   local old_saved = session.saved
   local old_transient = session.transient
+  local old_persisted_size = session._persisted_size
   session.saved = false
   session.transient = true
+  session._persisted_size = nil
 
   local ok = M.save(root, sessions)
   if not ok then
@@ -411,6 +475,7 @@ function M.delete(session, sessions, root)
     table.insert(sessions, target_idx, session)
     session.saved = old_saved
     session.transient = old_transient
+    session._persisted_size = old_persisted_size
     return false
   end
 

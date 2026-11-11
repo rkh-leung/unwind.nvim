@@ -18,6 +18,8 @@ end
 local test_env = require("tests.helpers.environment")
 local env_setup = test_env.setup_isolated_env()
 local sessions = require("unwind.sessions")
+local persistence = require("unwind.persistence")
+local unwind = require("unwind")
 local events = require("unwind.events")
 local test_root = test_env.create_temp_dir("session_spec_root_")
 local storage_file = sessions.storage_path(test_root)
@@ -193,6 +195,75 @@ do
   assert_eq(s.active_index, 1, "active_index updated after successful add")
 
   pcall(vim.api.nvim_buf_delete, dummy_buf, { force = true })
+  unwind.clear()
+end
+
+print("--> [Session Spec 7] Transactional persistence size & failure rollback...")
+do
+  unwind.clear()
+  local s = sessions.create({
+    root = test_root,
+    name = "Size Tx Session",
+    transient = false,
+    saved = true,
+    frames = {
+      { file = "app/file1.lua", line = 10 },
+    },
+  })
+
+  -- Uncommitted in-memory session reports estimated size
+  local est_sz, est_exact = sessions.get_size(s)
+  assert_true(est_sz > 0, "estimated size computed")
+  assert_eq(est_exact, false, "uncommitted session reports is_exact = false")
+
+  -- Save to disk
+  local saved_list = { s }
+  local ok = sessions.save(test_root, saved_list)
+  assert_true(ok, "session saved to disk")
+
+  local commit_sz, commit_exact = sessions.get_size(s)
+  assert_true(commit_exact, "saved session reports is_exact = true")
+  assert_eq(s._persisted_size, commit_sz, "_persisted_size committed to session")
+
+  -- Now simulate persistence failure during mutation
+  local orig_save = persistence.save
+  persistence.save = function() return false end
+
+  local ok_add = sessions.add_frame(s, { file = "app/file2.lua", line = 20 }, nil, saved_list)
+  assert_eq(ok_add, false, "mutation fails when disk write fails")
+  assert_eq(s._persisted_size, commit_sz, "_persisted_size preserved after failed save")
+
+  persistence.save = orig_save
+  unwind.clear()
+end
+
+print("--> [Session Spec 8] Dynamic project-frame counting across pattern and root changes...")
+do
+  unwind.clear()
+  local s = sessions.create({
+    root = test_root,
+    name = "Dynamic Project Frame Session",
+    transient = true,
+    frames = {
+      { file = "app/code.lua", line = 1 },
+      { file = "vendor/bundle/lib.lua", line = 2 },
+      { file = "custom_ignore/code.lua", line = 3 },
+    },
+  })
+
+  -- Default patterns: custom_ignore is inside workspace and not in default ignore list
+  local count1 = sessions.get_project_frame_count(s, test_root, { "vendor/bundle/" })
+  assert_eq(count1, 2, "app/code.lua and custom_ignore/code.lua are project frames")
+
+  -- Change ignore_patterns to include custom_ignore/
+  local count2 = sessions.get_project_frame_count(s, test_root, { "vendor/bundle/", "custom_ignore/" })
+  assert_eq(count2, 1, "immediately reflects updated patterns without stale caching")
+
+  -- Frame with explicit external=true
+  table.insert(s.raw_frames, { file = "app/external.lua", line = 4, external = true })
+  local count3 = sessions.get_project_frame_count(s, test_root, { "vendor/bundle/", "custom_ignore/" })
+  assert_eq(count3, 1, "external=true frame not counted as project")
+
   unwind.clear()
 end
 

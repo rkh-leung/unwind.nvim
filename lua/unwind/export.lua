@@ -8,10 +8,11 @@ local sidebar = require("unwind.sidebar")
 
 local M = {}
 
---- Default export configuration limits
+--- Monotonic counter for unique export buffer identification
+local export_seq = 0
+
+--- Default export configuration options
 M.defaults = {
-  max_bytes = 2 * 1024 * 1024,
-  max_method_lines = 400,
   fallback_context_lines = 10,
 }
 
@@ -80,7 +81,9 @@ function M.build(session, opts)
     excluded_frames = excluded_count,
     extracted_methods = {},
     unavailable_sources = 0,
-    truncated_methods = 0,
+    incomplete_extractions = 0,
+    export_bytes = 0,
+    export_size = "",
   }
 
   local lines = {}
@@ -109,70 +112,82 @@ function M.build(session, opts)
   end
 
   -- Pre-scan included frames to resolve paths and extract methods with deduplication
+  -- Uses a scoped extraction context to avoid redundant file reads and parser creation
   local method_items = {}
   local method_dedup_map = {} -- key: resolved_path + ":" + start_line + ":" + end_line -> method_index
   local frame_to_method_idx = {} -- included_idx -> method_index or nil
 
-  for idx, frame in ipairs(included_frames) do
-    local abs_target = frame.resolved_path or frame.path or frame.file
-    if abs_target and not path_util.is_absolute(abs_target) then
-      abs_target = root .. "/" .. abs_target
-    end
-    abs_target = abs_target and vim.fs.normalize(abs_target) or nil
+  local extraction_ctx = source_extract.create_context()
+  local ok_extract, extract_err = pcall(function()
+    for idx, frame in ipairs(included_frames) do
+      local abs_target = frame.resolved_path or frame.path or frame.file
+      if abs_target and not path_util.is_absolute(abs_target) then
+        abs_target = root .. "/" .. abs_target
+      end
+      abs_target = abs_target and vim.fs.normalize(abs_target) or nil
 
-    local is_available = abs_target and (path_util.is_file(abs_target) or (vim.uv or vim.loop).fs_stat(abs_target) ~= nil) and frame.navigable ~= false
+      local is_available = abs_target and (path_util.is_file(abs_target) or (vim.uv or vim.loop).fs_stat(abs_target) ~= nil) and frame.navigable ~= false
 
-    if not is_available then
-      frame_to_method_idx[idx] = nil
-      manifest.unavailable_sources = manifest.unavailable_sources + 1
-      table.insert(warnings, string.format("Source file unavailable for frame %d: %s", frame.raw_index or idx, frame.file or frame.path or "unknown"))
-    else
-      local extracted = source_extract.extract(abs_target, frame.line, {
-        method_hint = frame.method,
-        max_method_lines = opts.max_method_lines,
-        fallback_context_lines = opts.fallback_context_lines,
-      })
-
-      if not extracted then
+      if not is_available then
         frame_to_method_idx[idx] = nil
         manifest.unavailable_sources = manifest.unavailable_sources + 1
-        table.insert(warnings, string.format("Could not read or extract source for frame %d: %s:%d", frame.raw_index or idx, frame.file or frame.path, frame.line or 1))
+        table.insert(warnings, string.format("Source file unavailable for frame %d: %s", frame.raw_index or idx, frame.file or frame.path or "unknown"))
       else
-        if extracted.warning then
-          table.insert(warnings, string.format("Frame %d (%s): %s", frame.raw_index or idx, frame.file or frame.path, extracted.warning))
-        end
-        if extracted.truncated then
-          manifest.truncated_methods = manifest.truncated_methods + 1
-        end
+        local extracted = source_extract.extract(abs_target, frame.line, {
+          column = frame.col or frame.column,
+          method_hint = frame.method,
+          fallback_context_lines = opts.fallback_context_lines,
+        }, extraction_ctx)
 
-        local dedup_key = string.format("%s:%d:%d", abs_target, extracted.start_line, extracted.end_line)
-        local existing_method_idx = method_dedup_map[dedup_key]
-
-        if existing_method_idx then
-          frame_to_method_idx[idx] = existing_method_idx
+        if not extracted then
+          frame_to_method_idx[idx] = nil
+          manifest.unavailable_sources = manifest.unavailable_sources + 1
+          table.insert(warnings, string.format("Could not read or extract source for frame %d: %s:%d", frame.raw_index or idx, frame.file or frame.path, frame.line or 1))
         else
-          table.insert(method_items, {
-            id = #method_items + 1,
-            frame_num = frame.raw_index or idx,
-            file = frame.file or frame.path,
-            resolved_path = abs_target,
-            trace_line = frame.line,
-            method_name = extracted.name,
-            kind = extracted.kind,
-            code = extracted.code,
-            lang = extracted.lang,
-            start_line = extracted.start_line,
-            end_line = extracted.end_line,
-            source_type = extracted.source_type,
-            truncated = extracted.truncated,
-            warning = extracted.warning,
-          })
-          local new_method_idx = #method_items
-          method_dedup_map[dedup_key] = new_method_idx
-          frame_to_method_idx[idx] = new_method_idx
+          if extracted.warning then
+            table.insert(warnings, string.format("Frame %d (%s): %s", frame.raw_index or idx, frame.file or frame.path, extracted.warning))
+          end
+
+          local dedup_key = string.format("%s:%d:%d", abs_target, extracted.start_line, extracted.end_line)
+          local existing_method_idx = method_dedup_map[dedup_key]
+
+          if existing_method_idx then
+            frame_to_method_idx[idx] = existing_method_idx
+          else
+            if extracted.kind == "excerpt" or extracted.incomplete then
+              manifest.incomplete_extractions = manifest.incomplete_extractions + 1
+            end
+
+            table.insert(method_items, {
+              id = #method_items + 1,
+              frame_num = frame.raw_index or idx,
+              file = frame.file or frame.path,
+              resolved_path = abs_target,
+              trace_line = frame.line,
+              method_name = extracted.name,
+              kind = extracted.kind,
+              code = extracted.code,
+              lang = extracted.lang,
+              start_line = extracted.start_line,
+              end_line = extracted.end_line,
+              source_type = extracted.source_type,
+              incomplete = extracted.incomplete or false,
+              warning = extracted.warning,
+            })
+            local new_method_idx = #method_items
+            method_dedup_map[dedup_key] = new_method_idx
+            frame_to_method_idx[idx] = new_method_idx
+          end
         end
       end
     end
+  end)
+
+  -- Always release temporary extraction parser resources
+  extraction_ctx:dispose()
+
+  if not ok_extract then
+    error(extract_err)
   end
 
   -- Render Investigation Path items
@@ -254,10 +269,10 @@ function M.build(session, opts)
   table.insert(lines, string.format("Frames excluded by filter: %d", excluded_count))
   table.insert(lines, string.format("Unique methods extracted: %d", #method_items))
   table.insert(lines, string.format("Unavailable sources: %d", manifest.unavailable_sources))
+  table.insert(lines, string.format("Incomplete extractions: %d", manifest.incomplete_extractions))
 
-  if manifest.truncated_methods > 0 then
-    table.insert(lines, string.format("Truncated methods: %d", manifest.truncated_methods))
-  end
+  local size_line_idx = #lines + 1
+  table.insert(lines, "") -- placeholder for Export size line
 
   if #warnings > 0 then
     table.insert(lines, "")
@@ -270,16 +285,30 @@ function M.build(session, opts)
 
   manifest.extracted_methods = method_items
 
-  -- Size safeguard
+  -- Measure final generated output and report deterministic integer-only byte count
+  local text_util = require("unwind.text")
   local total_output_bytes = 0
-  for _, l in ipairs(lines) do
-    total_output_bytes = total_output_bytes + #l + 1
+  for _ = 1, 10 do
+    lines[size_line_idx] = string.format("Export size: %d bytes", total_output_bytes)
+    local doc = table.concat(lines, "\n")
+    if #doc == total_output_bytes then
+      break
+    end
+    total_output_bytes = #doc
   end
 
-  if total_output_bytes > opts.max_bytes then
-    table.insert(warnings, string.format("Total export size (%d bytes) exceeded max_bytes limit of %d bytes", total_output_bytes, opts.max_bytes))
-    table.insert(lines, string.format("> **Warning**: Total export size exceeded max_bytes (%d bytes). Some content may require truncation.", opts.max_bytes))
+  -- Guarantee invariant equality
+  local final_doc = table.concat(lines, "\n")
+  if #final_doc ~= total_output_bytes then
+    total_output_bytes = #final_doc
+    lines[size_line_idx] = string.format("Export size: %d bytes", total_output_bytes)
+    final_doc = table.concat(lines, "\n")
+    total_output_bytes = #final_doc
   end
+  assert(#final_doc == total_output_bytes, "Export byte calculation must equal finished document byte length")
+
+  manifest.export_bytes = total_output_bytes
+  manifest.export_size = text_util.format_bytes(total_output_bytes)
 
   return {
     lines = lines,
@@ -307,15 +336,29 @@ function M.export_to_buffer(session, opts)
   sidebar.ensure_source_window()
 
   local bufnr = vim.api.nvim_create_buf(true, false)
-  vim.bo[bufnr].buftype = "nofile"
-  vim.bo[bufnr].bufhidden = "hide"
-  vim.bo[bufnr].swapfile = false
-  vim.bo[bufnr].filetype = "markdown"
+  if not bufnr or bufnr == 0 or not vim.api.nvim_buf_is_valid(bufnr) then
+    vim.notify("Unwind: Could not allocate export buffer.", vim.log.levels.ERROR)
+    return -1
+  end
 
+  export_seq = export_seq + 1
   local sname = session.name or "untitled"
   local clean_name = sname:lower():gsub("[^%w_%-]", "_")
-  local bufname = string.format("unwind://export/%s.md", clean_name)
-  pcall(vim.api.nvim_buf_set_name, bufnr, bufname)
+  local session_id = (session.id and session.id ~= "") and session.id or clean_name
+  local export_id = string.format("%d_%d", os.time(), export_seq)
+  local bufname = string.format("unwind://export/%s/%s", session_id, export_id)
+
+  local ok_name, err_name = pcall(vim.api.nvim_buf_set_name, bufnr, bufname)
+  if not ok_name then
+    pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+    vim.notify("Unwind: Failed to name export buffer: " .. tostring(err_name), vim.log.levels.ERROR)
+    return -1
+  end
+
+  vim.bo[bufnr].buftype = "nofile"
+  vim.bo[bufnr].bufhidden = "wipe"
+  vim.bo[bufnr].swapfile = false
+  vim.bo[bufnr].filetype = "markdown"
 
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, result.lines)
   vim.bo[bufnr].modified = false
