@@ -6,7 +6,7 @@ A debugging session in `unwind.nvim` is a **mutable ordered list of source locat
 
 Debugging sessions are managed through a centralized session manager (`<leader>w`), edited and navigated via a Yazi-style persistent right vertical split sidebar, and projected as inline call-path telemetry into source buffers using Neovim's extended marks (`virt_lines`) API.
 
-There are zero external binary dependencies for core Unwind (no external CLI tools, no external JSON parsers, no database, no RPC processes). All parsing, session persistence, Tree-sitter function resolution, and buffer navigation run entirely in-process within Neovim. Optional language source enrichment (such as Ruby gem and stdlib resolution) optionally queries the project's local language runtime once to discover exact installed library paths.
+There are zero external binary dependencies for core Unwind (no external CLI tools, no external JSON parsers, no database, no RPC processes). Stacktrace syntax recognition is performed in-process using Lua pattern matching. Path resolution may query the local filesystem, and optional language-specific enrichment may probe a locally installed runtime. Runtime environment discovery is cached per project root.
 
 ---
 
@@ -228,11 +228,18 @@ All leader keymaps follow single-key mappings:
 
 ---
 
-## Running Tests
+## Running Tests and Benchmarks
 
 Run the headless test suite:
 
 ```bash
-nvim --headless -u NONE -c "luafile tests/parser_spec.lua" -c "qa!"
-nvim --headless -u NONE -c "luafile tests/leak_spec.lua" -c "qa!"
+nvim --headless -u NONE -c "set rtp+=." -c "luafile tests/parser_spec.lua" -c "qa!"
+nvim --headless -u NONE -c "set rtp+=." -c "luafile tests/leak_spec.lua" -c "qa!"
+nvim --headless -u NONE -c "set rtp+=." -c "luafile tests/perf_spec.lua" -c "qa!"
+```
+
+Run benchmarks:
+
+```bash
+nvim --headless -u NONE -c "set rtp+=." -c "luafile bench/benchmark.lua" -c "qa!"
 ```

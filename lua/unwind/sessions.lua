@@ -2,6 +2,7 @@
 -- Persistent Session Store, Session Lifecycle Management & Mutation API
 
 local events = require("unwind.events")
+local persistence = require("unwind.persistence")
 
 local M = {}
 
@@ -13,198 +14,24 @@ local function next_session_id()
   return string.format("sess_%d_%d", os.time(), session_id_seq)
 end
 
---- Compute canonical storage path for project root
---- Directory: stdpath("state")/unwind/
---- Filename: <sha256(normalized-project-root)>.json
----@param root string
----@return string filepath
----@return string dirpath
+--- Delegates storage path computation to persistence module (backwards-compatible)
 function M.storage_path(root)
-  local norm_root = vim.fs.normalize(root)
-  local hash = vim.fn.sha256(norm_root)
-  local state_dir = vim.fs.normalize(vim.fn.stdpath("state")) .. "/unwind"
-  return state_dir .. "/" .. hash .. ".json", state_dir
+  return persistence.storage_path(root)
 end
 
---- Serializes a session for disk persistence
---- Persists ONLY stable debugging facts:
----   id, name, filter_enabled, created_at, updated_at,
----   frames (path, file, line, col, method, origin, raw_line)
---- Does NOT persist:
----   resolved_path, navigable, file existence/availability,
----   file_index, primary_frame_index, active_index, active_file_index,
----   sidebar window/buf IDs, extmarks
----@param session table
----@return table
+--- Delegates session serialization to persistence module (backwards-compatible)
 function M.serialize_session(session)
-  local frames = {}
-  for _, f in ipairs(session.raw_frames or {}) do
-    local serialized_f = {
-      path = f.path or f.resolved_path or f.file,
-      file = f.file,
-      line = f.line,
-      col = f.col or f.column or 1,
-      method = f.method or "",
-      origin = f.origin or "stacktrace",
-      raw_line = f.raw_line or "",
-    }
-    if f.external ~= nil then
-      serialized_f.external = f.external
-    end
-    if f.source_kind ~= nil then
-      serialized_f.source_kind = f.source_kind
-    end
-    if f.resolution ~= nil then
-      serialized_f.resolution = f.resolution
-    end
-    table.insert(frames, serialized_f)
-  end
-
-  return {
-    id = session.id,
-    name = session.name or "Untitled",
-    filter_enabled = session.filter_enabled or false,
-    created_at = session.created_at or os.time(),
-    updated_at = session.updated_at or os.time(),
-    frames = frames,
-  }
+  return persistence.serialize_session(session)
 end
 
---- Load persisted sessions from disk for a given project root
---- Lazy-loaded on demand. Handles corrupt files gracefully with a single notification.
----@param root string
----@return table[] sessions List of session tables
+--- Delegates session loading to persistence module (backwards-compatible)
 function M.load(root)
-  local norm_root = vim.fs.normalize(root)
-  local filepath = M.storage_path(norm_root)
-
-  local stat = (vim.uv or vim.loop).fs_stat(filepath)
-  if not stat or stat.type ~= "file" then
-    return {}
-  end
-
-  local f = io.open(filepath, "r")
-  if not f then
-    return {}
-  end
-
-  local content = f:read("*all")
-  f:close()
-
-  if not content or vim.trim(content) == "" then
-    return {}
-  end
-
-  local ok, data = pcall(vim.json.decode, content)
-  if not ok or type(data) ~= "table" then
-    vim.notify("Unwind: Could not parse persisted sessions file (corrupt JSON): " .. filepath, vim.log.levels.WARN)
-    return {}
-  end
-
-  if data.root and data.root ~= norm_root then
-    -- Mismatched root sanity check
-    return {}
-  end
-
-  local sessions = {}
-  local raw_list = data.sessions or {}
-  for _, s_data in ipairs(raw_list) do
-    if type(s_data) == "table" and s_data.name then
-      local frames = {}
-      for _, f in ipairs(s_data.frames or {}) do
-        table.insert(frames, {
-          path = f.path or f.file,
-          file = f.file or f.path,
-          line = f.line,
-          col = f.col or f.column or 1,
-          column = f.col or f.column or 1,
-          method = f.method or "",
-          origin = f.origin or "stacktrace",
-          raw_line = f.raw_line or "",
-          external = f.external,
-          source_kind = f.source_kind,
-          resolution = f.resolution,
-        })
-      end
-
-      table.insert(sessions, {
-        id = s_data.id or next_session_id(),
-        name = s_data.name,
-        transient = false,
-        saved = true,
-        root = norm_root,
-        created_at = s_data.created_at or os.time(),
-        updated_at = s_data.updated_at or os.time(),
-        raw_frames = frames,
-        frames = {},
-        files = {},
-        active_index = 0,
-        active_file_index = 0,
-        filter_enabled = s_data.filter_enabled or false,
-      })
-    end
-  end
-
-  return sessions
+  return persistence.load(root)
 end
 
---- Atomically write saved sessions to disk for a project root
---- Writes to <filepath>.tmp first, then renames to <filepath>
----@param root string
----@param sessions table[]
----@return boolean success
-function M.save(root, sessions)
-  local norm_root = vim.fs.normalize(root)
-  local filepath, state_dir = M.storage_path(norm_root)
-
-  -- Ensure directory exists
-  vim.fn.mkdir(state_dir, "p")
-
-  local serialized_sessions = {}
-  for _, s in ipairs(sessions or {}) do
-    if s.saved and s.name then
-      table.insert(serialized_sessions, M.serialize_session(s))
-    end
-  end
-
-  local payload = {
-    schema_version = 1,
-    root = norm_root,
-    sessions = serialized_sessions,
-  }
-
-  local ok_json, json_text = pcall(vim.json.encode, payload)
-  if not ok_json or not json_text then
-    vim.notify("Unwind: Failed to encode sessions JSON: " .. tostring(json_text), vim.log.levels.ERROR)
-    return false
-  end
-
-  local tmp_path = filepath .. ".tmp." .. tostring((vim.uv or vim.loop).hrtime())
-  local f = io.open(tmp_path, "w")
-  if not f then
-    vim.notify("Unwind: Could not open temporary state file for write: " .. tmp_path, vim.log.levels.ERROR)
-    return false
-  end
-
-  local ok_write, write_err = f:write(json_text)
-  local ok_flush, flush_err = f:flush()
-  f:close()
-
-  if not ok_write or not ok_flush then
-    pcall(os.remove, tmp_path)
-    local err_msg = tostring(write_err or flush_err or "write error")
-    vim.notify("Unwind: Failed to write session state: " .. err_msg, vim.log.levels.ERROR)
-    return false
-  end
-
-  local ok_rename, err = os.rename(tmp_path, filepath)
-  if not ok_rename then
-    pcall(os.remove, tmp_path)
-    vim.notify("Unwind: Failed to atomically save session state: " .. tostring(err), vim.log.levels.ERROR)
-    return false
-  end
-
-  return true
+--- Delegates atomic save to persistence module (backwards-compatible)
+function M.save(root, sessions_list)
+  return persistence.save(root, sessions_list)
 end
 
 --- Standardize a frame table into canonical UnwindFrame format
@@ -293,25 +120,26 @@ function M.new_working(root, raw_frames, filter_enabled)
   })
 end
 
---- Centralized mutation executor with transactional persistence and events
+--- Centralized mutation executor with fine-grained transactional persistence and events.
+--- Uses operation-specific rollback rather than deepcopying entire session frame arrays (O(1) memory).
 ---@param session table
----@param fn fun(session: table)
+---@param apply fun(session: table): fun()? Apply returns an optional undo function
 ---@param session_list? table[] Saved sessions list for disk persistence
 ---@return boolean ok
 ---@return any err
-local function mutate(session, fn, session_list)
+local function mutate(session, apply, session_list)
   local old_updated_at = session.updated_at
-  local old_raw_frames = vim.deepcopy(session.raw_frames)
   local old_active_index = session.active_index
 
-  fn(session)
+  local undo = apply(session)
   session.updated_at = os.time()
 
   if session.name and session.saved and session_list then
-    local ok = M.save(session.root, session_list)
+    local ok = persistence.save(session.root, session_list)
     if not ok then
-      -- Rollback
-      session.raw_frames = old_raw_frames
+      if undo then
+        undo()
+      end
       session.updated_at = old_updated_at
       session.active_index = old_active_index
       return false, "Failed to persist mutation to disk"
@@ -332,13 +160,13 @@ function M.add_frame(session, frame, index, session_list)
   if not session then return false end
   local normalized = normalize_frame(frame)
   return mutate(session, function(s)
-    if index and index >= 1 and index <= #s.raw_frames + 1 then
-      table.insert(s.raw_frames, index, normalized)
-    else
-      table.insert(s.raw_frames, normalized)
-    end
+    local insert_at = (index and index >= 1 and index <= #s.raw_frames + 1) and index or (#s.raw_frames + 1)
+    table.insert(s.raw_frames, insert_at, normalized)
     if not s.active_index or s.active_index <= 0 then
       s.active_index = 1
+    end
+    return function()
+      table.remove(s.raw_frames, insert_at)
     end
   end, session_list)
 end
@@ -350,12 +178,22 @@ end
 ---@return boolean ok
 function M.add_frames(session, frames, session_list)
   if not session or not frames then return false end
+  local normalized_list = {}
+  for _, f in ipairs(frames) do
+    table.insert(normalized_list, normalize_frame(f))
+  end
   return mutate(session, function(s)
-    for _, f in ipairs(frames) do
-      table.insert(s.raw_frames, normalize_frame(f))
+    local start_len = #s.raw_frames
+    for _, f in ipairs(normalized_list) do
+      table.insert(s.raw_frames, f)
     end
     if (#s.raw_frames > 0) and (not s.active_index or s.active_index <= 0) then
       s.active_index = 1
+    end
+    return function()
+      for _ = 1, #normalized_list do
+        table.remove(s.raw_frames)
+      end
     end
   end, session_list)
 end
@@ -370,11 +208,14 @@ function M.remove_frame(session, index, session_list)
     return false
   end
   return mutate(session, function(s)
-    table.remove(s.raw_frames, index)
+    local removed = table.remove(s.raw_frames, index)
     if #s.raw_frames == 0 then
       s.active_index = 0
     elseif s.active_index and s.active_index > #s.raw_frames then
       s.active_index = #s.raw_frames
+    end
+    return function()
+      table.insert(s.raw_frames, index, removed)
     end
   end, session_list)
 end
@@ -391,7 +232,11 @@ function M.update_frame(session, index, new_frame, session_list)
   end
   local normalized = normalize_frame(new_frame)
   return mutate(session, function(s)
+    local previous = s.raw_frames[index]
     s.raw_frames[index] = normalized
+    return function()
+      s.raw_frames[index] = previous
+    end
   end, session_list)
 end
 
@@ -416,6 +261,10 @@ function M.move_frame(session, from_idx, to_idx, session_list)
       s.active_index = s.active_index - 1
     elseif from_idx > to_idx and s.active_index >= to_idx and s.active_index < from_idx then
       s.active_index = s.active_index + 1
+    end
+    return function()
+      local moved = table.remove(s.raw_frames, to_idx)
+      table.insert(s.raw_frames, from_idx, moved)
     end
   end, session_list)
 end
