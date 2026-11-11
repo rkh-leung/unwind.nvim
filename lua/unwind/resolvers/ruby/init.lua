@@ -67,8 +67,9 @@ function M.resolve(frame_path, opts)
   local parsed_git_gem = not parsed_gem and ruby_path.parse_bundler_git_path(frame_path) or nil
   local parsed_stdlib = not parsed_gem and not parsed_git_gem and ruby_path.parse_stdlib_path(frame_path) or nil
 
+  -- If path has no Ruby library signatures, do not pollute negative cache
   if not parsed_gem and not parsed_git_gem and not parsed_stdlib then
-    return store(nil)
+    return nil
   end
 
   -- 2. Obtain cached or probed Ruby environment for this root

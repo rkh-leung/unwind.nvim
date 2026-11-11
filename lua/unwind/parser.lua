@@ -201,19 +201,22 @@ function M.resolve_and_normalize_path(raw_path, opts)
   end
 
   -- Check language resolvers (e.g. Ruby gems, git gems, stdlib)
-  local ok_ruby, ruby_resolver = pcall(require, "unwind.resolvers.ruby")
-  if ok_ruby and ruby_resolver and ruby_resolver.resolve then
-    local r_res = ruby_resolver.resolve(raw_path, { root = root })
-    if r_res and r_res.path and file_exists(r_res.path) then
-      local display = normalized
-      if is_in_root then
-        display = normalized:sub(#root + 1)
+  local has_ruby_hint = raw_path:find("%.rb") ~= nil or raw_path:find("/gems/", 1, true) ~= nil or raw_path:find("/bundler/gems/", 1, true) ~= nil
+  if has_ruby_hint then
+    local ok_ruby, ruby_resolver = pcall(require, "unwind.resolvers.ruby")
+    if ok_ruby and ruby_resolver and ruby_resolver.resolve then
+      local r_res = ruby_resolver.resolve(raw_path, { root = root })
+      if r_res and r_res.path and file_exists(r_res.path) then
+        local display = normalized
+        if is_in_root then
+          display = normalized:sub(#root + 1)
+        end
+        return store_cache(display, r_res.path, true, {
+          external = true,
+          source_kind = r_res.source_kind,
+          resolution = r_res.resolution,
+        })
       end
-      return store_cache(display, r_res.path, true, {
-        external = true,
-        source_kind = r_res.source_kind,
-        resolution = r_res.resolution,
-      })
     end
   end
 
@@ -255,10 +258,15 @@ function M.resolve_and_normalize_path(raw_path, opts)
     table.insert(segments, segment)
   end
 
-  for i = 2, #segments do
-    if (#segments - i + 1) >= 2 or #segments <= 2 then
+  local seg_count = #segments
+
+  for i = 2, seg_count do
+    local remaining = seg_count - i + 1
+
+    if remaining >= 2 or seg_count <= 2 then
       local sub_path = table.concat(segments, "/", i)
       local abs_candidate = canonicalize_lexical(root .. sub_path)
+
       if file_exists(sub_path) or file_exists(abs_candidate) then
         return store_cache(sub_path, abs_candidate, true, nil)
       end
@@ -389,37 +397,40 @@ local matchers = {
   end,
 
   -- 7. Ruby style:
-  -- 'from /path/to/file.rb:12:in `method_name'\'' or '/path/to/file.rb:12:in `method_name\': error msg'
-  -- or with single quotes: 'from /path/to/file.rb:12:in '\''method_name\'\''
-  -- or blocks: 'from /path/to/file.rb:12:in `block in foo'\''
+  -- 'from /path/to/file.rb:12:in `method_name\'\'' or '/path/to/file.rb:12:in `method_name\': error msg'
+  -- or with single quotes: 'from /path/to/file.rb:12:in \'\'method_name\'\'''
+  -- or blocks: 'from /path/to/file.rb:12:in `block in foo\'\''
   function(line)
-    -- Check Windows drive letter path first e.g. C:\project\app.rb:12:in ...
-    local file, lnum, method = line:match("([%a]:[/\\][^:]+%.%w+):(%d+):in%s+[`'](.-)['`]")
-    if not file then
-      file, lnum, method = line:match("([^:]+%.%w+):(%d+):in%s+[`'](.-)['`]")
+    local has_in = line:find(":in%s+[`']")
+    if has_in then
+      local file, lnum, method = line:match("([%a]:[/\\][^:]+%.%w+):(%d+):in%s+[`'](.-)['`]")
+      if not file then
+        file, lnum, method = line:match("([^:]+%.%w+):(%d+):in%s+[`'](.-)['`]")
+      end
+      if file and lnum then
+        file = file:match("^%s*from%s+(.+)$") or file
+        return {
+          file = vim.trim(file),
+          line = tonumber(lnum),
+          col = 1,
+          method = method or "",
+        }
+      end
     end
-    if file and lnum then
-      file = file:match("^%s*from%s+(.+)$") or file
-      return {
-        file = vim.trim(file),
-        line = tonumber(lnum),
-        col = 1,
-        method = method or "",
-      }
-    end
-    -- Also match Ruby lines where in has no backticks/quotes or is omitted:
-    local f2, l2 = line:match("([%a]:[/\\][^:]+%.%w+):(%d+):?")
-    if not f2 then
-      f2, l2 = line:match("([^:]+%.%w+):(%d+):?")
-    end
-    if f2 and l2 and (line:find("^%s*from%s+") or line:find("%.rb:%d+")) then
-      f2 = f2:match("^%s*from%s+(.+)$") or f2
-      return {
-        file = vim.trim(f2),
-        line = tonumber(l2),
-        col = 1,
-        method = "",
-      }
+    if line:find("^%s*from%s+") or line:find("%.rb:%d+") then
+      local f2, l2 = line:match("([%a]:[/\\][^:]+%.%w+):(%d+):?")
+      if not f2 then
+        f2, l2 = line:match("([^:]+%.%w+):(%d+):?")
+      end
+      if f2 and l2 then
+        f2 = f2:match("^%s*from%s+(.+)$") or f2
+        return {
+          file = vim.trim(f2),
+          line = tonumber(l2),
+          col = 1,
+          method = "",
+        }
+      end
     end
     return nil
   end,
@@ -429,7 +440,12 @@ local matchers = {
   -- support paths with spaces, @, +, (), etc.
   -- enforce that file extension begins with an alphabetical character to prevent matching timestamps
   function(line)
-    -- Skip URLs early
+    -- Reject lines that cannot contain the file:line form required by this matcher.
+    if not line:find(":%d+") then
+      return nil
+    end
+
+    -- Preserve the original URL exclusion behavior.
     if line:match("https?://") or line:match("ftp://") then
       return nil
     end
@@ -602,18 +618,26 @@ function M.parse(text, opts)
     in_python_block = false
   end
 
+  local function is_candidate_line(l)
+    if l:find("at ", 1, true) then return true end
+    if l:find("File \"", 1, true) then return true end
+    if l:find("-->", 1, true) then return true end
+    if l:find(":in", 1, true) or l:find("from ", 1, true) or l:find("%.rb:%d+") then return true end
+    if l:find("%.%a%w*:%d+") then return true end
+    return false
+  end
+
   for line in text:gmatch("[^\r\n]+") do
     if #frames >= max_frames and not in_python_block then
       break
     end
 
-    local trimmed = line:match("^%s*(.-)%s*$")
-    if trimmed ~= "" then
-      -- Check for Python traceback header
-      if line:find("Traceback %s*%(most recent call last%):") then
-        flush_python_block()
-        in_python_block = true
-      else
+    if line:find("Traceback", 1, true) and line:find("Traceback %s*%(most recent call last%):") then
+      flush_python_block()
+      in_python_block = true
+    elseif in_python_block or is_candidate_line(line) then
+      local trimmed = line:match("^%s*(.-)%s*$")
+      if trimmed ~= "" then
         local matched_frame = nil
         local is_python_frame = false
 
