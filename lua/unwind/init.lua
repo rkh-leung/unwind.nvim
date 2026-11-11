@@ -161,6 +161,10 @@ local function get_sidebar_callbacks(session)
       local cur_sess = state.current() or session
       M.move_frame_in_session(cur_sess, from_idx, to_idx)
     end,
+    on_annotate_frame = function(f_idx)
+      local cur_sess = state.current() or session
+      M.annotate(f_idx, cur_sess)
+    end,
     on_replace_frame = function(f_idx)
       local cur_sess = state.current() or session
       M.replace_frame_in_session(cur_sess, f_idx)
@@ -339,6 +343,80 @@ function M.new_session()
   })
   M.activate_session(session)
   return session
+end
+
+--- Annotate a frame in the active session (prompts user for annotation note)
+---@param frame_idx? number Frame index (defaults to active_index)
+---@param session? table Target session (defaults to state.current())
+function M.annotate(frame_idx, session)
+  session = session or state.current()
+  if not session or not session.frames or #session.frames == 0 then
+    vim.notify("Unwind: No active frames to annotate.", vim.log.levels.WARN)
+    return
+  end
+
+  local target_idx = frame_idx or session.active_index
+  if not target_idx or target_idx < 1 or target_idx > #session.frames then
+    target_idx = (session.active_index and session.active_index > 0) and session.active_index or 1
+  end
+
+  local target_frame = session.frames[target_idx]
+  if not target_frame then
+    vim.notify("Unwind: Frame not found.", vim.log.levels.WARN)
+    return
+  end
+
+  local target_session_id = session.id
+  local target_raw_index = target_frame.raw_index
+  local current_note = target_frame.note or ""
+
+  ui.prompt_input("Annotate frame", current_note, function(input_text)
+    -- Verify active/target session didn't switch under prompt
+    local cur_sess = state.current()
+    if not cur_sess or cur_sess.id ~= target_session_id then
+      -- If current is not same session, try to update target session if still exists
+      if session.id ~= target_session_id then
+        return
+      end
+    end
+
+    local sess = (cur_sess and cur_sess.id == target_session_id) and cur_sess or session
+    -- Find the frame with matching raw_index in sess.frames
+    local resolved_frame_idx = nil
+    for idx, f in ipairs(sess.frames or {}) do
+      if f.raw_index == target_raw_index then
+        resolved_frame_idx = idx
+        break
+      end
+    end
+
+    if not resolved_frame_idx then
+      -- If filtered or missing, check raw_frames directly
+      if sess.raw_frames and sess.raw_frames[target_raw_index] then
+        local root = sess.root or state.get_root()
+        local saved_sessions = state.ensure_sessions_loaded(root)
+        local existing_raw = sess.raw_frames[target_raw_index]
+        local clean_note = nil
+        if input_text ~= nil then
+          local trimmed = vim.trim(tostring(input_text))
+          if trimmed ~= "" then
+            clean_note = trimmed
+          end
+        end
+        existing_raw.note = clean_note
+        if sess.saved and saved_sessions then
+          sessions.save(root, saved_sessions)
+        end
+        M.rebuild_derived(sess)
+        sidebar.render(sess)
+      end
+      return
+    end
+
+    local root = sess.root or state.get_root()
+    local saved_sessions = state.ensure_sessions_loaded(root)
+    session_actions.annotate_frame_in_session(sess, resolved_frame_idx, input_text, saved_sessions, M.config)
+  end)
 end
 
 --- Prompt for session name and save working session

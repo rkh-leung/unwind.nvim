@@ -115,6 +115,7 @@ unwind.nvim/
   - `:UnwindQuickfix`: Exports active stacktrace frames to Neovim's quickfix list.
   - `:UnwindClear`: Clears all extmarks, hides sidebar, and deactivates active session non-destructively.
   - `:UnwindRubyInfo`: Displays diagnostic information about the detected Ruby environment, managers, and gem roots.
+  - `:UnwindAnnotate`: Prompts user to annotate the active debugging frame with a note.
 - Installs default keymaps with tracked ownership in `_installed_keymaps`.
 
 ### 2.2 Core Controller & State (`lua/unwind/init.lua`)
@@ -137,7 +138,7 @@ Key invariants & responsibilities:
 
 ### 2.3 Persistent Sessions Store (`lua/unwind/sessions.lua`)
 - **Storage Scope**: Sessions are persisted per project root in `stdpath("state")/unwind/<sha256(root)>.json`.
-- **Stable Debugging Facts Only**: Only serializes `name`, `filter_enabled`, and `raw_frames` (`file`, `line`, `col`, `method`, `raw_line`). Transient state (buffer IDs, window IDs, extmarks, availability, active indices) is never persisted.
+- **Stable Debugging Facts Only**: Only serializes `name`, `filter_enabled`, and `raw_frames` (`file`, `line`, `col`, `method`, `raw_line`, and optional single-line `note`). Transient state (buffer IDs, window IDs, extmarks, availability, active indices) is never persisted.
 - **Transactional Persistence**: `save_working()`, `rename()`, `delete()`, and frame deletion perform in-memory rollback if disk write fails.
 - **Atomic File Writes**: Serializes payload to `<filepath>.tmp.<hrtime>`, verifies return values of both `write()` and `flush()`, and renames atomically over the target state file.
 
@@ -156,6 +157,8 @@ Processes text line-by-line across Raygun/.NET, Java, Rust, Node.js/V8, Python, 
 
 ### 2.6 Extmarks & Floating Menu (`lua/unwind/decorator.lua` & `lua/unwind/ui.lua`)
 - Injects non-invasive `virt_lines` telemetry above fault lines using `unwind_diagnostics` namespace.
+- Contextual headers: renders `● [DEBUG PATH] Step X/Y: method()` for manual frames (`UnwindDecorManual`) and `● [STACK FRAME] Frame X/Y: method()` for imported traces (`UnwindDecorStack`).
+- Frame annotations: when a frame has a note, renders an additional virtual line `💬 <note>` with `UnwindAnnotation` highlight group.
 - Session manager modal (`ui.open_session_manager`) handles saving, selecting, renaming, and deleting saved sessions.
 - Input scratchpad (`ui.open_input`) enables direct pasting of trace text with `<C-s>` / `:w` submission.
 

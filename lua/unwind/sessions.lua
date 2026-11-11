@@ -48,6 +48,13 @@ local function normalize_frame(frame)
   local external = frame.external
   local source_kind = frame.source_kind
   local resolution = frame.resolution
+  local note = frame.note
+  if note ~= nil then
+    note = vim.trim(tostring(note))
+    if note == "" then
+      note = nil
+    end
+  end
 
   return {
     path = path,
@@ -63,6 +70,7 @@ local function normalize_frame(frame)
     external = external,
     source_kind = source_kind,
     resolution = resolution,
+    note = note,
   }
 end
 

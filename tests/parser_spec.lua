@@ -344,7 +344,7 @@ local extmarks1 = vim.api.nvim_buf_get_extmarks(decor_buf1, decorator.get_namesp
 assert_true(#extmarks1 > 0, "extmarks exist in buffer 1")
 local header = extmarks1[1][4].virt_lines[1][1][1]
 assert_true(header:find("anonymous") == nil, "header should not contain anonymous, got: " .. header)
-assert_true(header:find("Frame #1/5") ~= nil, "header should contain Frame #1/5, got: " .. header)
+assert_true(header:find("Frame 1/5") ~= nil or header:find("Frame #1/5") ~= nil, "header should contain Frame 1/5, got: " .. header)
 
 -- Rendering in buf 2 must globally clear buf 1's extmarks
 local ext_id2 = decorator.render(decor_buf2, 1, 2, "process", "core/other.rb", 5)

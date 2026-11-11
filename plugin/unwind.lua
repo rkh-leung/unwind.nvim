@@ -43,6 +43,10 @@ vim.api.nvim_create_user_command("UnwindSidebar", function()
   require("unwind").toggle_sidebar()
 end, { desc = "Toggle persistent call-trace sidebar" })
 
+vim.api.nvim_create_user_command("UnwindAnnotate", function()
+  require("unwind").annotate()
+end, { desc = "Annotate the active debugging frame" })
+
 vim.api.nvim_create_user_command("UnwindNext", function()
   require("unwind").next()
 end, { desc = "Jump to next stack frame" })

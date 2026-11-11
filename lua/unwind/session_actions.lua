@@ -292,6 +292,10 @@ function M.replace_frame_in_session(session, frame_idx, saved_sessions, config)
   local target_frame = session.frames[frame_idx]
   local raw_idx = target_frame.raw_index
 
+  if target_frame and target_frame.note ~= nil and frame_data.note == nil then
+    frame_data.note = target_frame.note
+  end
+
   if raw_idx then
     local ok = sessions.update_frame(session, raw_idx, frame_data, saved_sessions)
     if ok then
@@ -302,6 +306,66 @@ function M.replace_frame_in_session(session, frame_idx, saved_sessions, config)
       vim.notify(string.format("Unwind: Replaced frame %d with %s:%d.", frame_idx, frame_data.file, frame_data.line), vim.log.levels.INFO)
     end
   end
+end
+
+--- Annotate a frame in session
+---@param session table
+---@param frame_idx number
+---@param note_text? string
+---@param saved_sessions table[]
+---@param config table
+---@return boolean ok
+function M.annotate_frame_in_session(session, frame_idx, note_text, saved_sessions, config)
+  if not session or not session.frames or not session.frames[frame_idx] then
+    return false
+  end
+
+  local target_frame = session.frames[frame_idx]
+  local raw_idx = target_frame.raw_index
+  if not raw_idx or not session.raw_frames or not session.raw_frames[raw_idx] then
+    return false
+  end
+
+  local existing_raw = session.raw_frames[raw_idx]
+  local clean_note = nil
+  if note_text ~= nil then
+    local trimmed = vim.trim(tostring(note_text))
+    if trimmed ~= "" then
+      clean_note = trimmed
+    end
+  end
+
+  local updated_frame = {
+    path = existing_raw.path,
+    file = existing_raw.file,
+    line = existing_raw.line,
+    col = existing_raw.col,
+    column = existing_raw.column,
+    method = existing_raw.method,
+    origin = existing_raw.origin,
+    raw_line = existing_raw.raw_line,
+    resolved_path = existing_raw.resolved_path,
+    navigable = existing_raw.navigable,
+    external = existing_raw.external,
+    source_kind = existing_raw.source_kind,
+    resolution = existing_raw.resolution,
+    note = clean_note,
+  }
+
+  local ok, err = sessions.update_frame(session, raw_idx, updated_frame, saved_sessions)
+  if not ok then
+    vim.notify("Unwind: Failed to persist annotation: " .. tostring(err), vim.log.levels.ERROR)
+    return false
+  end
+
+  M.rebuild_derived(session, config)
+  sidebar.render(session)
+
+  if session.active_index == frame_idx then
+    navigation.jump_to_frame(session, frame_idx)
+  end
+
+  return true
 end
 
 --- Remove a frame from a session

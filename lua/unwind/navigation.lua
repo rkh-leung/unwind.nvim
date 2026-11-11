@@ -166,7 +166,10 @@ function M.jump_to_frame(session, idx)
     end
   end
 
-  decorator.render(bufnr, target_line, idx, frame.method, frame.file, #session.frames)
+  decorator.render(bufnr, target_line, idx, frame.method, frame.file, #session.frames, {
+    origin = frame.origin,
+    note = frame.note,
+  })
   sidebar.set_active(session, idx)
   return true, true
 end
