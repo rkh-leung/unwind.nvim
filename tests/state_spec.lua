@@ -47,4 +47,40 @@ do
   state.reset()
 end
 
+print("--> [State Spec 3] Full reset clears sessions_by_root without touching disk...")
+do
+  local test_env = require("tests.helpers.environment")
+  local isolated = test_env.setup_isolated_env()
+  local root1 = test_env.create_temp_dir("state_spec_root1_")
+  local root2 = test_env.create_temp_dir("state_spec_root2_")
+
+  -- Create and save session in root1
+  local s1 = sessions.create({ root = root1, name = "Root1 Session" })
+  local list1 = state.ensure_sessions_loaded(root1)
+  sessions.save_working(s1, "Root1 Session", list1, root1)
+
+  -- Create and save session in root2
+  local s2 = sessions.create({ root = root2, name = "Root2 Session" })
+  local list2 = state.ensure_sessions_loaded(root2)
+  sessions.save_working(s2, "Root2 Session", list2, root2)
+
+  assert_true(state.sessions_by_root[root1] ~= nil, "root1 cached")
+  assert_true(state.sessions_by_root[root2] ~= nil, "root2 cached")
+
+  -- Perform reset
+  state.reset()
+
+  assert_eq(state.current(), nil, "no active session")
+  assert_eq(next(state.sessions_by_root), nil, "sessions_by_root completely cleared")
+
+  -- Reload from disk verifies data on disk is preserved
+  local reloaded1 = state.ensure_sessions_loaded(root1)
+  assert_eq(#reloaded1, 1, "disk data preserved for root1")
+  assert_eq(reloaded1[1].name, "Root1 Session")
+
+  state.reset()
+  isolated.cleanup()
+  test_env.cleanup_all()
+end
+
 print("All state spec tests PASSED successfully!")

@@ -269,7 +269,7 @@ function M.from_cursor(opts)
       frame.col = start_col + 1
       frame.column = start_col + 1
       frame.method = method_name
-      frame.origin = "treesitter"
+      frame.origin = "manual"
       frame.raw_line = string.format("%s:%d:%d%s", rel_path, frame.line, frame.col, method_name and (" at " .. method_name) or "")
       return frame
     end

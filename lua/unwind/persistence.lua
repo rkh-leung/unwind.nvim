@@ -64,8 +64,79 @@ function M.serialize_session(session)
   }
 end
 
+--- Track paths with corrupt or unreadable persisted state to prevent accidental overwrite
+M._corrupted_roots = {}
+
+--- Check if a project root has a corrupted state file that shouldn't be overwritten blindly
+---@param root string
+---@return boolean
+function M.is_corrupted(root)
+  local norm_root = vim.fs.normalize(root)
+  return M._corrupted_roots[norm_root] == true
+end
+
+--- Clear corrupted status for root (e.g. after deliberate recovery)
+---@param root string
+function M.clear_corrupted(root)
+  local norm_root = vim.fs.normalize(root)
+  M._corrupted_roots[norm_root] = nil
+end
+
+--- Validates a frame object decoded from persistence
+---@param f any
+---@return table? normalized_frame
+local function validate_frame(f)
+  if type(f) ~= "table" then
+    return nil
+  end
+
+  local path = f.path or f.file
+  if type(path) ~= "string" or vim.trim(path) == "" then
+    return nil
+  end
+
+  local file = (type(f.file) == "string" and f.file ~= "") and f.file or path
+  local line = tonumber(f.line)
+  if not line or line < 1 then
+    line = 1
+  end
+
+  local col = tonumber(f.col or f.column)
+  if not col or col < 1 then
+    col = 1
+  end
+
+  local method = (type(f.method) == "string") and f.method or ""
+  local origin = (f.origin == "manual" or f.origin == "stacktrace") and f.origin or "stacktrace"
+  local raw_line = (type(f.raw_line) == "string") and f.raw_line or ""
+
+  local note = nil
+  if f.note ~= nil then
+    local note_str = vim.trim(tostring(f.note))
+    if note_str ~= "" then
+      note = note_str
+    end
+  end
+
+  return {
+    path = path,
+    file = file,
+    line = math.floor(line),
+    col = math.floor(col),
+    column = math.floor(col),
+    method = method,
+    origin = origin,
+    raw_line = raw_line,
+    external = type(f.external) == "boolean" and f.external or nil,
+    source_kind = type(f.source_kind) == "string" and f.source_kind or nil,
+    resolution = type(f.resolution) == "string" and f.resolution or nil,
+    note = note,
+  }
+end
+
 --- Load persisted sessions from disk for a given project root
---- Lazy-loaded on demand. Handles corrupt files gracefully with a single notification.
+--- Lazy-loaded on demand. Handles corrupt files gracefully with structural validation.
+--- Preserves original bytes and tags root as corrupted if invalid.
 ---@param root string
 ---@return table[] sessions List of session tables
 function M.load(root)
@@ -86,59 +157,92 @@ function M.load(root)
   f:close()
 
   if not content or vim.trim(content) == "" then
+    -- Empty state file is invalid/corrupt
+    M._corrupted_roots[norm_root] = true
+    vim.notify("Unwind: Persisted sessions file is empty: " .. filepath, vim.log.levels.WARN)
     return {}
   end
 
   local ok, data = pcall(vim.json.decode, content)
-  if not ok or type(data) ~= "table" then
+  if not ok or type(data) ~= "table" or vim.tbl_islist(data) then
+    M._corrupted_roots[norm_root] = true
     vim.notify("Unwind: Could not parse persisted sessions file (corrupt JSON): " .. filepath, vim.log.levels.WARN)
     return {}
   end
 
-  if data.root and data.root ~= norm_root then
+  -- Validate schema_version
+  if data.schema_version ~= nil and data.schema_version ~= 1 then
+    M._corrupted_roots[norm_root] = true
+    vim.notify(string.format("Unwind: Unsupported schema version (%s) in %s", tostring(data.schema_version), filepath), vim.log.levels.WARN)
+    return {}
+  end
+
+  -- Validate root matching
+  if data.root and type(data.root) == "string" and vim.fs.normalize(data.root) ~= norm_root then
+    return {}
+  end
+
+  -- Validate sessions collection
+  if data.sessions ~= nil and type(data.sessions) ~= "table" then
+    M._corrupted_roots[norm_root] = true
+    vim.notify("Unwind: Corrupt sessions field (expected array) in " .. filepath, vim.log.levels.WARN)
     return {}
   end
 
   local sessions_list = {}
   local raw_list = data.sessions or {}
-  for _, s_data in ipairs(raw_list) do
-    if type(s_data) == "table" and s_data.name then
-      local frames = {}
-      for _, f in ipairs(s_data.frames or {}) do
-        table.insert(frames, {
-          path = f.path or f.file,
-          file = f.file or f.path,
-          line = f.line,
-          col = f.col or f.column or 1,
-          column = f.col or f.column or 1,
-          method = f.method or "",
-          origin = f.origin or "stacktrace",
-          raw_line = f.raw_line or "",
-          external = f.external,
-          source_kind = f.source_kind,
-          resolution = f.resolution,
-          note = (f.note ~= nil and vim.trim(tostring(f.note)) ~= "") and vim.trim(tostring(f.note)) or nil,
-        })
+
+  -- Ensure raw_list is an array (not an object with non-numeric keys)
+  if type(raw_list) == "table" then
+    for k, s_data in pairs(raw_list) do
+      if type(k) ~= "number" then
+        M._corrupted_roots[norm_root] = true
+        vim.notify("Unwind: Malformed sessions collection in " .. filepath, vim.log.levels.WARN)
+        return {}
       end
 
-      table.insert(sessions_list, {
-        id = s_data.id or ("sess_" .. os.time() .. "_" .. #sessions_list),
-        name = s_data.name,
-        transient = false,
-        saved = true,
-        root = norm_root,
-        created_at = s_data.created_at or os.time(),
-        updated_at = s_data.updated_at or os.time(),
-        raw_frames = frames,
-        frames = {},
-        files = {},
-        active_index = 0,
-        active_file_index = 0,
-        filter_enabled = s_data.filter_enabled or false,
-      })
+      if type(s_data) == "table" and type(s_data.name) == "string" and vim.trim(s_data.name) ~= "" then
+        local frames = {}
+        local raw_frames = s_data.frames
+        if raw_frames ~= nil and type(raw_frames) ~= "table" then
+          M._corrupted_roots[norm_root] = true
+          vim.notify("Unwind: Malformed frames collection in session " .. tostring(s_data.name), vim.log.levels.WARN)
+          return {}
+        end
+
+        for f_idx, f in pairs(raw_frames or {}) do
+          if type(f_idx) ~= "number" then
+            M._corrupted_roots[norm_root] = true
+            vim.notify("Unwind: Malformed frame array in session " .. tostring(s_data.name), vim.log.levels.WARN)
+            return {}
+          end
+          local valid_f = validate_frame(f)
+          if valid_f then
+            table.insert(frames, valid_f)
+          end
+        end
+
+        table.insert(sessions_list, {
+          id = (type(s_data.id) == "string" and s_data.id ~= "") and s_data.id or ("sess_" .. os.time() .. "_" .. #sessions_list),
+          name = vim.trim(s_data.name),
+          transient = false,
+          saved = true,
+          root = norm_root,
+          created_at = tonumber(s_data.created_at) or os.time(),
+          updated_at = tonumber(s_data.updated_at) or os.time(),
+          raw_frames = frames,
+          frames = {},
+          files = {},
+          active_index = 0,
+          active_file_index = 0,
+          filter_enabled = s_data.filter_enabled == true,
+        })
+      end
     end
   end
 
+  -- Successfully decoded and validated
+  M._corrupted_roots[norm_root] = nil
   return sessions_list
 end
 
@@ -150,6 +254,13 @@ end
 function M.save(root, sessions)
   local norm_root = vim.fs.normalize(root)
   local filepath, state_dir = M.storage_path(norm_root)
+
+  -- Safety policy: Refuse to overwrite if the existing file on disk failed validation
+  -- unless explicitly cleared or no corrupted state is flagged.
+  if M.is_corrupted(norm_root) then
+    vim.notify("Unwind: Refusing to overwrite existing corrupt session file: " .. filepath, vim.log.levels.ERROR)
+    return false
+  end
 
   -- Ensure directory exists
   vim.fn.mkdir(state_dir, "p")

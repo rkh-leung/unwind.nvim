@@ -19,11 +19,19 @@ M.raw = {
 }
 
 --- Reset in-memory state (useful for clear and test teardown)
+--- Reset all in-memory runtime state and cached sessions across roots
+--- Used for test isolation and complete state resets without modifying disk contents
 function M.reset()
   M.raw.root = nil
   M.raw.sessions = {}
   M.raw.sessions_loaded = false
   M.raw.sessions_root = nil
+  M.raw.active_session = nil
+  M.sessions_by_root = {}
+end
+
+--- Clear only the active presentation and active session, preserving loaded root caches
+function M.clear_active()
   M.raw.active_session = nil
 end
 

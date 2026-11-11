@@ -34,14 +34,21 @@ This guide is designed for engineers who are working on `unwind.nvim`. We cover 
 │   └── unwind.lua          # Auto-loaded entrypoint: user commands (:UnwindAdd, etc.) & default keymaps
 ├── lua/
 │   └── unwind/
-│       ├── init.lua        # Controller & orchestrator: navigation, filter toggle, session actions
-│       ├── sessions.lua    # Core session model, mutation API, and atomic disk persistence
-│       ├── events.lua      # Event bus for session mutations and lifecycle notifications
-│       ├── location.lua    # Tree-sitter AST function declaration resolver and fallback
-│       ├── sidebar.lua     # Split view: persistent right-hand call-trace sidebar & path editor
-│       ├── parser.lua      # Pattern matcher: parses multi-language stack traces & normalizes paths
+│       ├── init.lua        # Facade & public API orchestration
+│       ├── state.lua       # Centralized runtime state container and multi-root session caching
+│       ├── ingest.lua      # Ingestion entry points from text, clipboard, files, ranges, and selections
+│       ├── navigation.lua  # Buffer navigation, cursor jumping, frame cycling, quickfix export
+│       ├── session_actions.lua # Session modifications, frame mutations, filter reapplication, refresh
+│       ├── sessions.lua    # Session domain model and transactional mutation API
+│       ├── persistence.lua # Atomic state serialization and disk persistence with structural validation
+│       ├── events.lua      # Event bus for session lifecycle notifications
+│       ├── location.lua    # Tree-sitter AST function declaration resolver and cursor fallback
+│       ├── sidebar.lua     # Persistent right vertical split sidebar & interactive call-path editor
+│       ├── parser.lua      # Pure Lua stacktrace pattern matcher and path normalizer
+│       ├── path.lua        # Filesystem path helpers and stat caching
 │       ├── collector.lua   # Aggregator: deduplicates files in trace order & tags vendor paths
 │       ├── decorator.lua   # Extmarks: renders virtual line banners (virt_lines) above fault lines
+│       ├── text.lua        # UTF-8 display width truncation helpers
 │       ├── ui.lua          # Floating UI: session manager float, input scratchpad, single-line prompt
 │       └── resolvers/      # Multi-tiered path resolution subsystem
 │           ├── init.lua    # Resolver pipeline coordinator (workspace -> mappings -> language)
@@ -54,13 +61,32 @@ This guide is designed for engineers who are working on `unwind.nvim`. We cover 
 │               ├── git_gems.lua    # Bundler git gems matching
 │               ├── stdlib.lua      # Standard library resolution
 │               └── managers/       # Adapters: rbenv, asdf, mise, chruby, rvm, system
+├── scripts/
+│   ├── test.sh             # Isolated headless test suite runner
+│   └── benchmark.sh        # Isolated microbenchmark runner
 └── tests/
+    ├── helpers/            # Shared test environment isolation helpers
     ├── fixtures/           # Real-world crash traces and test dummy files
-    ├── parser_spec.lua     # Automated functional, regression, and invariant test suite
-    ├── leak_spec.lua       # Memory stability, garbage collection, and window/buffer leak test
-    ├── session_spec.lua    # Session model, mutation API, and disk persistence test suite
+    ├── annotation_spec.lua # Frame annotations and virtual line note rendering
     ├── clipboard_spec.lua  # Clipboard isolation test suite
-    └── location_spec.lua   # Tree-sitter and cursor location extraction test suite
+    ├── collector_spec.lua  # Derived frames collection and vendor tagging
+    ├── correctness_spec.lua# Functional correctness and navigation invariants
+    ├── decoration_sync_spec.lua # Visual synchronization across reordering and availability
+    ├── ingestion_spec.lua  # Ingestion consistency and transient session isolation
+    ├── isolation_spec.lua  # State isolation from genuine user storage
+    ├── leak_spec.lua       # Memory stability, garbage collection, and window/buffer leak test
+    ├── location_spec.lua   # Tree-sitter and cursor location extraction test suite
+    ├── parser_spec.lua     # Automated functional, regression, and invariant test suite
+    ├── path_spec.lua       # Path resolution and lexical canonicalization
+    ├── perf_spec.lua       # Performance invariants
+    ├── persistence_validation_spec.lua # Persistence schema validation and corrupt file handling
+    ├── regression_fixes_spec.lua # Checklist and regression verification
+    ├── ruby_resolver_spec.lua    # Ruby environment detection and gem resolution
+    ├── ruby/git_gems_spec.lua    # Bundler git gems resolution
+    ├── ruby/stdlib_spec.lua      # Sparse stdlib directory resolution
+    ├── session_spec.lua    # Session model, mutation API, and disk persistence test suite
+    ├── sidebar_spec.lua    # Sidebar display formatting and truncation
+    └── state_spec.lua      # Runtime state and multi-root caching
 ```
 
 ---

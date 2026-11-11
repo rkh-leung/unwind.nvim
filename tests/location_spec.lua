@@ -95,17 +95,71 @@ do
   vim.api.nvim_win_set_cursor(0, { 3, 4 })
 
   local f = location.from_cursor({ bufnr = buf, resolve_function = true })
-  -- If Neovim has lua tree-sitter parser installed in runtime:
-  if f.origin == "treesitter" then
+  assert_eq(f.origin, "manual", "origin must always be manual even with Tree-sitter")
+  if f.method == "process_request" then
     assert_eq(f.line, 1, "resolved to function declaration line 1")
-    assert_eq(f.method, "process_request", "extracted function name")
   else
-    -- Fallback is valid
     assert_eq(f.line, 3, "fallback to cursor line when parser not installed in headless env")
-    assert_eq(f.origin, "manual", "fallback origin")
   end
 
   pcall(vim.api.nvim_buf_delete, buf, { force = true })
+end
+
+print("--> [Location Spec 5] Origin invariants: manual vs stacktrace frames and decorator headers...")
+do
+  local decorator = require("unwind.decorator")
+  local sessions = require("unwind.sessions")
+  local parser = require("unwind.parser")
+  local test_env = require("tests.helpers.environment")
+  local isolated = test_env.setup_isolated_env()
+  local test_root = test_env.create_temp_dir("origin_spec_root_")
+
+  -- 1. Manual frame from location.from_cursor
+  local manual_frame = {
+    path = "app/models/user.rb",
+    file = "app/models/user.rb",
+    line = 10,
+    col = 1,
+    origin = "manual",
+    method = "calculate",
+  }
+  assert_eq(manual_frame.origin, "manual")
+
+  -- 2. Stacktrace frame parsed from trace
+  local trace_text = "    at Service.processJob (src/worker/service.ts:142:15)\n"
+  local parsed_frames = parser.parse(trace_text, { root = test_root })
+  assert_eq(#parsed_frames, 1)
+  assert_eq(parsed_frames[1].origin, "stacktrace", "parsed trace frames have stacktrace origin")
+
+  -- 3. Saved manual session roundtrip preserves manual origin
+  local s = sessions.create({ root = test_root, name = "Manual Session" })
+  sessions.add_frame(s, manual_frame)
+  local list = {}
+  sessions.save_working(s, "Manual Session", list, test_root)
+
+  local loaded = sessions.load(test_root)
+  assert_eq(#loaded, 1)
+  assert_eq(loaded[1].raw_frames[1].origin, "manual", "reloaded manual session preserves manual origin")
+
+  -- 4. Check decorator headers directly via buffer rendering
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "line 1", "line 2", "line 3" })
+
+  decorator.render(buf, 2, 1, "calculate", "app/models/user.rb", 2, { origin = "manual" })
+  local extmarks = vim.api.nvim_buf_get_extmarks(buf, decorator.get_namespace(), 0, -1, { details = true })
+  assert_eq(#extmarks, 1)
+  local virt_lines = extmarks[1][4].virt_lines
+  assert_true(virt_lines[1][1][1]:find("%[DEBUG PATH%]") ~= nil, "manual origin produces [DEBUG PATH]")
+
+  decorator.render(buf, 2, 1, "processJob", "src/worker/service.ts", 2, { origin = "stacktrace" })
+  local extmarks2 = vim.api.nvim_buf_get_extmarks(buf, decorator.get_namespace(), 0, -1, { details = true })
+  assert_eq(#extmarks2, 1)
+  local virt_lines2 = extmarks2[1][4].virt_lines
+  assert_true(virt_lines2[1][1][1]:find("%[STACK FRAME%]") ~= nil, "stacktrace origin produces [STACK FRAME]")
+
+  pcall(vim.api.nvim_buf_delete, buf, { force = true })
+  isolated.cleanup()
+  test_env.cleanup_all()
 end
 
 print("All location spec tests PASSED successfully!")

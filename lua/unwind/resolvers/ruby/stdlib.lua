@@ -21,22 +21,22 @@ function M.resolve(parsed_stdlib, env)
     return nil
   end
 
-  local search_dirs = {
-    env.rubylibdir,
-    env.archdir,
-    env.sitelibdir,
-    env.vendorlibdir,
-  }
+  local candidates = { "rubylibdir", "archdir", "sitelibdir", "vendorlibdir" }
+  local search_dirs = {}
+  for _, key in ipairs(candidates) do
+    local val = env[key]
+    if val and val ~= "" and type(val) == "string" then
+      table.insert(search_dirs, val)
+    end
+  end
 
   for _, dir in ipairs(search_dirs) do
-    if dir and dir ~= "" then
-      local candidate = vim.fs.normalize(dir .. "/" .. parsed_stdlib.stdlib_path)
-      if is_file(candidate) then
-        return {
-          path = candidate,
-          module = parsed_stdlib.module_name,
-        }
-      end
+    local candidate = vim.fs.normalize(dir .. "/" .. parsed_stdlib.stdlib_path)
+    if is_file(candidate) then
+      return {
+        path = candidate,
+        module = parsed_stdlib.module_name,
+      }
     end
   end
 

@@ -75,7 +75,7 @@ You can start a session from scratch without having a stacktrace at all. Run `:U
   - `s`: Save session (prompts for name).
   - `r`: Refresh file availability.
   - `q`: Hide sidebar.
-- **Frame Annotations & Contextual Virtual Lines**: Annotate individual debugging frames with hypotheses and observations via `a` in sidebar or `:UnwindAnnotate`. Virtual lines display neutral contextual headings (`[DEBUG PATH]` for manual steps and `[STACK FRAME]` for stacktraces) alongside inline note banners (`💬 <note>`). Annotations persist across restarts for saved sessions.
+- **Frame Annotations & Contextual Virtual Lines**: Annotate individual debugging frames with hypotheses and observations via `a` in sidebar or `:UnwindAnnotate`. Single-line annotations are the current feature; multiline editing is a possible future enhancement, not implemented functionality. Virtual lines display neutral contextual headings (`[DEBUG PATH]` for manual steps and `[STACK FRAME]` for stacktraces) alongside inline note banners (`💬 <note>`). Annotations persist across restarts for saved sessions.
 - **Pure Lua In-Memory Parsing**: Ingests and parses crash stacktraces in-process via native Lua pattern matching (Raygun/.NET, Java, Rust, Node.js/V8, Python, Ruby, compiler errors, generic logs).
 - **Multi-Tiered Path Resolvers (Ruby Gems, Bundler Git, & Stdlib)**: Automatically enriches deployed container / production traces into navigable local files:
   - Application workspace resolver with container prefix stripping (`/app/`, `/var/task/`).
@@ -235,7 +235,13 @@ All leader keymaps follow single-key mappings:
 
 ## Running Tests and Benchmarks
 
-Run the headless test suite:
+Run the isolated test runner across all test suites:
+
+```bash
+./scripts/test.sh
+```
+
+Run individual tests headlessly in isolated environment:
 
 ```bash
 nvim --headless -u NONE -c "set rtp+=." -c "luafile tests/parser_spec.lua" -c "qa!"
@@ -243,8 +249,8 @@ nvim --headless -u NONE -c "set rtp+=." -c "luafile tests/leak_spec.lua" -c "qa!
 nvim --headless -u NONE -c "set rtp+=." -c "luafile tests/perf_spec.lua" -c "qa!"
 ```
 
-Run benchmarks:
+Run benchmarks safely in an isolated environment:
 
 ```bash
-nvim --headless -u NONE -c "set rtp+=." -c "luafile bench/benchmark.lua" -c "qa!"
+./scripts/benchmark.sh
 ```
