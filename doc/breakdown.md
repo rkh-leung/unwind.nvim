@@ -40,6 +40,8 @@ This guide is designed for engineers who are working on `unwind.nvim`. We cover 
 │       ├── navigation.lua  # Buffer navigation, cursor jumping, frame cycling, quickfix export
 │       ├── session_actions.lua # Session modifications, frame mutations, filter reapplication, refresh
 │       ├── sessions.lua    # Session domain model and transactional mutation API
+│       ├── export.lua      # Markdown export generator respecting active session filtering
+│       ├── source_extract.lua # Tree-sitter AST method extraction and fallback excerpt reader
 │       ├── persistence.lua # Atomic state serialization and disk persistence with structural validation
 │       ├── events.lua      # Event bus for session lifecycle notifications
 │       ├── location.lua    # Tree-sitter AST function declaration resolver and cursor fallback
@@ -99,7 +101,7 @@ This guide is designed for engineers who are working on `unwind.nvim`. We cover 
 
 Key points:
 - Prevents redundant execution using `vim.g.loaded_unwind`.
-- Registers user commands: `:Unwind`, `:UnwindFile`, `:UnwindInput`, `:UnwindClipboard`, `:UnwindSelection`, `:UnwindMenu`, `:UnwindSidebar`, `:UnwindNext`, `:UnwindPrev`, `:UnwindNextFile`, `:UnwindPrevFile`, `:UnwindToggleFilter`, `:UnwindQuickfix`, `:UnwindClear`, `:UnwindRubyInfo`, `:UnwindAnnotate`.
+- Registers user commands: `:Unwind`, `:UnwindFile`, `:UnwindInput`, `:UnwindClipboard`, `:UnwindSelection`, `:UnwindMenu`, `:UnwindSidebar`, `:UnwindNext`, `:UnwindPrev`, `:UnwindNextFile`, `:UnwindPrevFile`, `:UnwindToggleFilter`, `:UnwindQuickfix`, `:UnwindExport`, `:UnwindClear`, `:UnwindRubyInfo`, `:UnwindAnnotate`.
 - Calls `unwind.install_keymaps()` to bind default single-key leader shortcuts (`<leader>w`, `<leader>c`) without overriding custom user keymaps unless explicitly forced.
 
 ---

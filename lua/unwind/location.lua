@@ -4,7 +4,7 @@
 local M = {}
 
 --- Language adapters for AST function nodes and name extraction
-local adapters = {
+M.adapters = {
   lua = {
     function_nodes = {
       function_declaration = true,
@@ -144,7 +144,7 @@ local adapters = {
 }
 
 --- Generic function node check for languages without explicit adapter
-local generic_function_types = {
+M.generic_function_types = {
   ["function_definition"] = true,
   ["function_declaration"] = true,
   ["method_definition"] = true,
@@ -158,14 +158,14 @@ local generic_function_types = {
 ---@param lang string
 ---@param node any
 ---@return boolean
-local function is_function_node(lang, node)
+function M.is_function_node(lang, node)
   if not node then return false end
   local node_type = node:type()
-  local adapter = adapters[lang]
+  local adapter = M.adapters[lang]
   if adapter and adapter.function_nodes then
     return adapter.function_nodes[node_type] == true
   end
-  return generic_function_types[node_type] == true
+  return M.generic_function_types[node_type] == true
 end
 
 --- Extract function name from node using adapter or standard name field
@@ -173,9 +173,9 @@ end
 ---@param node any
 ---@param bufnr integer
 ---@return string?
-local function get_function_name(lang, node, bufnr)
+function M.get_function_name(lang, node, bufnr)
   if not node then return nil end
-  local adapter = adapters[lang]
+  local adapter = M.adapters[lang]
   if adapter and adapter.get_name then
     local ok, name = pcall(adapter.get_name, node, bufnr)
     if ok and name and name ~= "" then
@@ -261,9 +261,9 @@ function M.from_cursor(opts)
   -- Ascend AST tree to find enclosing function
   local current = node
   while current do
-    if is_function_node(lang, current) then
+    if M.is_function_node(lang, current) then
       local start_row, start_col = current:range()
-      local method_name = get_function_name(lang, current, bufnr)
+      local method_name = M.get_function_name(lang, current, bufnr)
 
       frame.line = start_row + 1
       frame.col = start_col + 1
