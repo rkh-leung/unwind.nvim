@@ -163,8 +163,10 @@ function M.load(root)
     return {}
   end
 
+  local is_list = vim.islist or vim.tbl_islist
+
   local ok, data = pcall(vim.json.decode, content)
-  if not ok or type(data) ~= "table" or vim.tbl_islist(data) then
+  if not ok or type(data) ~= "table" or is_list(data) then
     M._corrupted_roots[norm_root] = true
     vim.notify("Unwind: Could not parse persisted sessions file (corrupt JSON): " .. filepath, vim.log.levels.WARN)
     return {}
@@ -185,7 +187,7 @@ function M.load(root)
   end
 
   -- Validate sessions collection
-  if data.sessions ~= nil and (type(data.sessions) ~= "table" or not vim.tbl_islist(data.sessions)) then
+  if data.sessions ~= nil and (type(data.sessions) ~= "table" or not is_list(data.sessions)) then
     M._corrupted_roots[norm_root] = true
     vim.notify("Unwind: Corrupt sessions field (expected array) in " .. filepath, vim.log.levels.WARN)
     return {}
@@ -202,7 +204,7 @@ function M.load(root)
     end
 
     local raw_frames = s_data.frames
-    if raw_frames ~= nil and (type(raw_frames) ~= "table" or not vim.tbl_islist(raw_frames)) then
+    if raw_frames ~= nil and (type(raw_frames) ~= "table" or not is_list(raw_frames)) then
       M._corrupted_roots[norm_root] = true
       vim.notify("Unwind: Malformed frames array in session " .. tostring(s_data.name), vim.log.levels.WARN)
       return {}

@@ -80,7 +80,10 @@ do
   -- Jump to frame and assert correct local buffer is opened
   local cur_buf = vim.api.nvim_get_current_buf()
   local cur_buf_name = vim.fs.normalize(vim.api.nvim_buf_get_name(cur_buf))
-  assert_eq(cur_buf_name, dummy_local, "navigated to local source file")
+  -- On macOS /var is often a symlink to /private/var, so canonicalize realpath for comparison
+  local real_cur = (vim.uv or vim.loop).fs_realpath(cur_buf_name) or cur_buf_name
+  local real_expected = (vim.uv or vim.loop).fs_realpath(dummy_local) or dummy_local
+  assert_eq(vim.fs.normalize(real_cur), vim.fs.normalize(real_expected), "navigated to local source file")
 
   -- Cleanup
   sessions.delete(reloaded_session, list, test_root)
