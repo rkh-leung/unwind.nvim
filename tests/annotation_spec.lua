@@ -449,4 +449,43 @@ do
   unwind.clear()
 end
 
+print("--> [Annotation Spec 11] Deleted frame with pending prompt does NOT annotate remaining frame at same location...")
+do
+  unwind.clear()
+  unwind.ingest([[
+  File "tests/fixtures/dummy.txt", line 1, in duplicate_loc
+  File "tests/fixtures/dummy.txt", line 1, in duplicate_loc
+]])
+  local s = unwind.state.active_session
+  assert_eq(#s.frames, 2, "2 identical frames")
+  local frame_a = s.frames[1]
+  local frame_b = s.frames[2]
+
+  local ui = require("unwind.ui")
+  local orig_prompt = ui.prompt_input
+  local captured_submit = nil
+
+  ui.prompt_input = function(title, default_val, on_submit)
+    captured_submit = on_submit
+  end
+
+  -- Start annotating frame A (index 1)
+  unwind.annotate(1)
+  assert_true(captured_submit ~= nil, "prompt opened for frame A")
+
+  -- Delete frame A while prompt is pending
+  unwind.delete_frame_from_session(s, 1)
+  assert_eq(#s.frames, 1, "1 frame remaining after delete")
+  assert_eq(s.frames[1], frame_b, "frame B moved into position 1")
+
+  -- Now submit the pending annotation for frame A
+  captured_submit("Note intended for deleted frame A")
+
+  -- Frame B must NOT receive frame A's note
+  assert_eq(frame_b.note, nil, "remaining frame B at same location must remain unannotated")
+
+  ui.prompt_input = orig_prompt
+  unwind.clear()
+end
+
 print("All annotation spec tests PASSED successfully!")

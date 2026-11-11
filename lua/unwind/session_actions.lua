@@ -340,7 +340,7 @@ function M.annotate_frame_in_session(session, frame_idx_or_target, note_text, sa
     return false
   end
 
-  -- Locate raw_idx stably by object identity first, falling back to raw_index
+  -- Locate raw_idx stably by exact object identity
   local raw_idx = nil
   for idx, rf in ipairs(session.raw_frames or {}) do
     if rf == target_frame then
@@ -349,9 +349,9 @@ function M.annotate_frame_in_session(session, frame_idx_or_target, note_text, sa
     end
   end
 
-  if not raw_idx and target_frame.raw_index and session.raw_frames and session.raw_frames[target_frame.raw_index] then
-    local candidate = session.raw_frames[target_frame.raw_index]
-    if candidate == target_frame or (candidate.path == target_frame.path and candidate.line == target_frame.line and candidate.col == target_frame.col and candidate.method == target_frame.method) then
+  -- If target was passed as a numeric index, allow using target_frame.raw_index if still pointing to target_frame
+  if not raw_idx and type(frame_idx_or_target) == "number" and target_frame.raw_index then
+    if session.raw_frames and session.raw_frames[target_frame.raw_index] == target_frame then
       raw_idx = target_frame.raw_index
     end
   end
