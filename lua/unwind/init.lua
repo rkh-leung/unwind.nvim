@@ -345,9 +345,9 @@ end
 ---@param session table
 function M.prompt_save_session(session)
   local root = session and session.root or state.get_root()
-  state.ensure_sessions_loaded(root)
+  local saved_sessions = state.ensure_sessions_loaded(root)
   ui.prompt_input("Save session as", session.name or "Session 1", function(name)
-    local ok, err = sessions.save_working(session, name, state.raw.sessions, root)
+    local ok, err = sessions.save_working(session, name, saved_sessions, root)
     if not ok then
       vim.notify("Unwind: " .. tostring(err), vim.log.levels.ERROR)
     else

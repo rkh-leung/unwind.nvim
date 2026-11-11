@@ -364,4 +364,93 @@ do
   unwind.clear()
 end
 
+print("--> [Follow-up 1] Prompt save session uses captured saved_sessions rather than mutated state.raw.sessions...")
+do
+  unwind.clear()
+  local temp_dir = vim.fn.tempname()
+  vim.fn.mkdir(temp_dir, "p")
+
+  local sess = sessions.create({
+    root = temp_dir,
+    name = nil,
+    transient = true,
+    frames = { { file = "temp.lua", line = 1 } },
+  })
+  unwind.activate_session(sess)
+
+  -- Mock ui.prompt_input so it defers and changes state.raw.sessions before callback executes
+  local orig_prompt = require("unwind.ui").prompt_input
+  local captured_cb = nil
+  require("unwind.ui").prompt_input = function(prompt, default_val, cb)
+    captured_cb = cb
+  end
+
+  unwind.prompt_save_session(sess)
+  assert_true(captured_cb ~= nil, "prompt_input was called")
+
+  -- Mutate global state.raw.sessions before executing the deferred callback
+  local poisoned_list = {}
+  state.raw.sessions = poisoned_list
+
+  -- Execute deferred callback
+  captured_cb("Captured Session")
+
+  -- Verify session was saved to temp_dir and was placed into the captured collection, not the poisoned list
+  local loaded = persistence.load(temp_dir)
+  assert_eq(#loaded, 1, "session persisted to disk")
+  assert_eq(loaded[1].name, "Captured Session", "persisted session name")
+  assert_eq(#poisoned_list, 0, "poisoned list was not used")
+
+  -- Restore ui.prompt_input
+  require("unwind.ui").prompt_input = orig_prompt
+  pcall(vim.fn.delete, temp_dir, "rf")
+  unwind.clear()
+end
+
+print("--> [Follow-up 2] toggle_filter identity precedence: IDs over duplicate names & legacy sessions...")
+do
+  unwind.clear()
+  local temp_dir = vim.fn.tempname()
+  vim.fn.mkdir(temp_dir, "p")
+
+  -- Create two distinct sessions sharing the same name but different IDs
+  local sess_1 = sessions.create({
+    id = "id_alpha",
+    root = temp_dir,
+    name = "Duplicate Name",
+    transient = false,
+    filter_enabled = false,
+    frames = { { file = "a.lua", line = 1 } },
+  })
+  local sess_2 = sessions.create({
+    id = "id_beta",
+    root = temp_dir,
+    name = "Duplicate Name",
+    transient = false,
+    filter_enabled = false,
+    frames = { { file = "b.lua", line = 2 } },
+  })
+  local saved_list = { sess_1, sess_2 }
+  sessions.save(temp_dir, saved_list)
+
+  -- Toggle filter on sess_1 (id_alpha)
+  session_actions.toggle_filter(sess_1, saved_list, unwind.config)
+
+  -- sess_1 must have filter_enabled = true; sess_2 must remain false despite having the same name
+  assert_eq(sess_1.filter_enabled, true, "sess_1 filter toggled to true")
+  assert_eq(sess_2.filter_enabled, false, "sess_2 filter remained false because ID differs")
+
+  -- Test legacy sessions without ID: fallback to matching name
+  local legacy_saved = {
+    { name = "Legacy A", filter_enabled = false, saved = true, root = temp_dir, raw_frames = { { file = "l.lua", line = 1 } } }
+  }
+  local legacy_target = { name = "Legacy A", filter_enabled = false, saved = true, root = temp_dir, raw_frames = { { file = "l.lua", line = 1 } } }
+  session_actions.toggle_filter(legacy_target, legacy_saved, unwind.config)
+  assert_eq(legacy_target.filter_enabled, true, "legacy target toggled")
+  assert_eq(legacy_saved[1].filter_enabled, true, "legacy saved matched by name fallback")
+
+  pcall(vim.fn.delete, temp_dir, "rf")
+  unwind.clear()
+end
+
 print("All regression checklist tests PASSED successfully!")

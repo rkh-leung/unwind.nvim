@@ -141,6 +141,26 @@ function M.reapply_filter(session, config)
   sidebar.render(session)
 end
 
+local function same_session(a, b)
+  if a == b then
+    return true
+  end
+
+  local a_id = a.id
+  local b_id = b.id
+
+  if a_id ~= nil and a_id ~= "" and b_id ~= nil and b_id ~= "" then
+    return a_id == b_id
+  end
+
+  -- Legacy compatibility only when IDs are unavailable
+  if (a_id == nil or a_id == "") and (b_id == nil or b_id == "") then
+    return a.name ~= nil and a.name ~= "" and a.name == b.name
+  end
+
+  return false
+end
+
 --- Toggle vendor / library filtering for active session
 ---@param session table
 ---@param saved_sessions table[]
@@ -157,7 +177,7 @@ function M.toggle_filter(session, saved_sessions, config)
   if session.saved and saved_sessions then
     -- Ensure session in saved_sessions list has updated filter_enabled if session table was a loaded copy
     for _, s in ipairs(saved_sessions) do
-      if s == session or (s.id and s.id == session.id) or (s.name and s.name == session.name) then
+      if same_session(s, session) then
         s.filter_enabled = session.filter_enabled
       end
     end
@@ -165,7 +185,7 @@ function M.toggle_filter(session, saved_sessions, config)
     if not ok then
       session.filter_enabled = old_filter
       for _, s in ipairs(saved_sessions) do
-        if s == session or (s.id and s.id == session.id) or (s.name and s.name == session.name) then
+        if same_session(s, session) then
           s.filter_enabled = old_filter
         end
       end
