@@ -36,26 +36,26 @@ local test_root = vim.fs.normalize(vim.fn.getcwd())
 print("--> [Checklist 1/8] Persistence round-trip with remote path mapping (P0)...")
 do
   unwind.clear()
-  -- Configure path_mappings to map /app/ to local workspace
-  unwind.setup({
-    path_mappings = {
-      ["/app/"] = "./",
-    },
-  })
-
-  -- Create dummy local file that /app/src/worker.py maps to
-  local dummy_local = test_root .. "/src/worker.py"
-  vim.fn.mkdir(test_root .. "/src", "p")
+  -- Use an isolated temporary directory for test
+  local temp_dir = vim.fn.tempname()
+  vim.fn.mkdir(temp_dir .. "/local_src", "p")
+  local dummy_local = temp_dir .. "/local_src/worker.py"
   local f = io.open(dummy_local, "w")
   f:write("def work(): pass\n")
   f:close()
 
+  unwind.setup({
+    path_mappings = {
+      ["/app/"] = temp_dir .. "/local_src/",
+    },
+  })
+
   -- Ingest remote container trace
-  local trace = 'File "/app/src/worker.py", line 1, in work\n'
+  local trace = 'File "/app/worker.py", line 1, in work\n'
   unwind.ingest(trace)
   local session = state.current()
   assert_true(session ~= nil, "session created")
-  assert_eq(session.raw_frames[1].path, "/app/src/worker.py", "raw frame stores original remote path")
+  assert_eq(session.raw_frames[1].path, "/app/worker.py", "raw frame stores original remote path")
 
   -- Save session
   local list = {}
@@ -71,20 +71,20 @@ do
   -- In raw loaded state from disk, runtime resolved_path is not serialized
   assert_eq(reloaded_session.raw_frames[1].resolved_path, nil, "resolved_path is nil on freshly loaded session")
 
-  -- Now activate session: rebuild_derived and ensure_frames_resolved must re-resolve /app/src/worker.py to local worker.py
+  -- Now activate session: rebuild_derived and ensure_frames_resolved must re-resolve /app/worker.py to local worker.py
   unwind.activate_session(reloaded_session)
   assert_true(reloaded_session.frames[1] ~= nil, "frame collected")
-  assert_eq(reloaded_session.frames[1].resolved_path, test_root .. "/src/worker.py", "re-resolved to local file")
+  assert_eq(reloaded_session.frames[1].resolved_path, dummy_local, "re-resolved to local file")
   assert_eq(reloaded_session.files[1].available, true, "file marked available on disk")
 
   -- Jump to frame and assert correct local buffer is opened
   local cur_buf = vim.api.nvim_get_current_buf()
   local cur_buf_name = vim.fs.normalize(vim.api.nvim_buf_get_name(cur_buf))
-  assert_true(cur_buf_name:find("src/worker%.py") ~= nil, "navigated to local source file")
+  assert_eq(cur_buf_name, dummy_local, "navigated to local source file")
 
   -- Cleanup
   sessions.delete(reloaded_session, list, test_root)
-  pcall(os.remove, dummy_local)
+  pcall(vim.fn.delete, temp_dir, "rf")
   unwind.setup({ path_mappings = {} })
   unwind.clear()
 end
@@ -207,17 +207,24 @@ end
 print("--> [Checklist 5/8] Quickfix export with remapped and missing paths (P1)...")
 do
   unwind.clear()
+  local temp_dir = vim.fn.tempname()
+  vim.fn.mkdir(temp_dir, "p")
+  local expected_file = temp_dir .. "/actual_file.lua"
+  local f = io.open(expected_file, "w")
+  f:write("return true\n")
+  f:close()
+
   unwind.setup({
     path_mappings = {
-      ["/ci/build/"] = "./",
+      ["/ci/build/"] = temp_dir .. "/",
     },
   })
 
   local sess = sessions.create({
     root = test_root,
     frames = {
-      { file = "/ci/build/tests/fixtures/dummy.txt", line = 1, col = 2, method = "dummy_fn" },
-      { file = "/ci/build/nonexistent_xyz.py", line = 50, col = 1, method = "fail_fn" },
+      { file = "/ci/build/actual_file.lua", line = 1, col = 2, method = "dummy_fn" },
+      { file = "/ci/build/nonexistent_xyz.py", line = 50, col = 1, method = nil, raw_line = nil },
     },
     transient = true,
   })
@@ -227,14 +234,18 @@ do
   local qflist = vim.fn.getqflist()
   assert_eq(#qflist, 2, "2 quickfix entries")
 
-  -- First entry is valid and remapped to tests/fixtures/dummy.txt
+  -- First entry is valid and remapped to expected_file (assert exact filename, not method fallback)
   assert_eq(qflist[1].valid, 1, "first item is valid")
-  assert_true(vim.fs.normalize(qflist[1].module ~= "" and qflist[1].module or vim.fn.bufname(qflist[1].bufnr)):find("dummy%.txt") ~= nil or qflist[1].text:find("dummy_fn") ~= nil, "first item points to dummy.txt")
+  local actual_fname = vim.fs.normalize(vim.fn.bufname(qflist[1].bufnr))
+  assert_eq(actual_fname, expected_file, "first item points exactly to resolved filename")
+  assert_eq(qflist[1].lnum, 1, "first item line number")
+  assert_eq(qflist[1].col, 2, "first item column")
 
-  -- Second entry is missing: must have valid = 0 and [N/A] in text
+  -- Second entry is missing with nil method and raw_line: must not crash, have valid = 0 and [N/A] in text
   assert_eq(qflist[2].valid, 0, "missing item marked valid = 0")
   assert_true(qflist[2].text:find("%[N/A%]") ~= nil, "missing item text includes [N/A]")
 
+  pcall(vim.fn.delete, temp_dir, "rf")
   unwind.setup({ path_mappings = {} })
   unwind.clear()
 end
@@ -249,18 +260,29 @@ do
   assert_eq(frames[1].col, 10, "col is 10")
 end
 
-print("--> [Checklist 7/8] Workspace switching and session root isolation (P2)...")
+print("--> [Checklist 7/8] Workspace switching, activation, and navigation isolation (P2)...")
 do
-  local root_a = "/tmp/test_workspace_a"
-  local root_b = "/tmp/test_workspace_b"
+  unwind.clear()
+  local root_a = vim.fn.tempname()
+  local root_b = vim.fn.tempname()
   vim.fn.mkdir(root_a, "p")
   vim.fn.mkdir(root_b, "p")
+
+  local file_a = root_a .. "/main_a.py"
+  local f_a = io.open(file_a, "w")
+  f_a:write("print('project a')\n")
+  f_a:close()
+
+  local file_b = root_b .. "/main_b.py"
+  local f_b = io.open(file_b, "w")
+  f_b:write("print('project b')\n")
+  f_b:close()
 
   local sess_a = sessions.create({
     root = root_a,
     name = "Project A Session",
     transient = false,
-    frames = { { file = "a.py", line = 10 } },
+    frames = { { file = "main_a.py", line = 1, method = "fn_a" } },
   })
   sessions.save(root_a, { sess_a })
 
@@ -268,37 +290,56 @@ do
     root = root_b,
     name = "Project B Session",
     transient = false,
-    frames = { { file = "b.py", line = 20 } },
+    frames = { { file = "main_b.py", line = 1, method = "fn_b" } },
   })
   sessions.save(root_b, { sess_b })
 
-  -- Verify roots are isolated
+  -- Activate session A
+  unwind.activate_session(sess_a)
+  assert_eq(state.get_root(), root_a, "active root is root_a")
+  assert_eq(sess_a.frames[1].resolved_path, file_a, "session A resolved to file_a")
+  local cur_buf_a = vim.fs.normalize(vim.api.nvim_buf_get_name(0))
+  assert_eq(cur_buf_a, file_a, "navigation opened file_a")
+
+  -- Switch active project to session B
+  unwind.activate_session(sess_b)
+  assert_eq(state.get_root(), root_b, "active root switched to root_b")
+  assert_eq(sess_b.frames[1].resolved_path, file_b, "session B resolved to file_b")
+  local cur_buf_b = vim.fs.normalize(vim.api.nvim_buf_get_name(0))
+  assert_eq(cur_buf_b, file_b, "navigation opened file_b")
+
+  -- Mutate session B (e.g. toggle filter) and verify session A's disk persistence is unaffected
+  unwind.toggle_filter()
   local loaded_a = persistence.load(root_a)
   local loaded_b = persistence.load(root_b)
 
-  assert_eq(#loaded_a, 1, "project A has 1 session")
-  assert_eq(loaded_a[1].name, "Project A Session", "project A session name")
-  assert_eq(loaded_a[1].root, root_a, "project A session root matches")
+  assert_eq(#loaded_a, 1, "root_a still has 1 session")
+  assert_eq(loaded_a[1].name, "Project A Session", "root_a session intact")
+  assert_eq(loaded_a[1].filter_enabled, false, "root_a session filter remained false")
 
-  assert_eq(#loaded_b, 1, "project B has 1 session")
-  assert_eq(loaded_b[1].name, "Project B Session", "project B session name")
-  assert_eq(loaded_b[1].root, root_b, "project B session root matches")
+  assert_eq(#loaded_b, 1, "root_b has 1 session")
+  assert_eq(loaded_b[1].name, "Project B Session", "root_b session name")
+  assert_eq(loaded_b[1].filter_enabled, true, "root_b session filter toggled to true")
 
   local fa, _ = sessions.storage_path(root_a)
   local fb, _ = sessions.storage_path(root_b)
   pcall(os.remove, fa)
   pcall(os.remove, fb)
+  pcall(vim.fn.delete, root_a, "rf")
+  pcall(vim.fn.delete, root_b, "rf")
+  unwind.clear()
 end
 
 print("--> [Checklist 8/8] Missing file restoration and navigation refresh (P2)...")
 do
   unwind.clear()
-  local dyn_file = test_root .. "/tests/fixtures/dynamic_restore_test.py"
-  pcall(os.remove, dyn_file)
+  local temp_dir = vim.fn.tempname()
+  vim.fn.mkdir(temp_dir, "p")
+  local dyn_file = temp_dir .. "/dynamic_restore_test.py"
 
   local sess = sessions.create({
-    root = test_root,
-    frames = { { file = "tests/fixtures/dynamic_restore_test.py", line = 1, method = "test_fn" } },
+    root = temp_dir,
+    frames = { { file = "dynamic_restore_test.py", line = 1, method = "test_fn" } },
     transient = true,
   })
   unwind.activate_session(sess)
@@ -316,8 +357,10 @@ do
   -- Jump to frame
   local selected, opened = unwind.jump_to_frame(1)
   assert_true(selected and opened, "navigation succeeds now that file is restored")
+  local cur_buf = vim.fs.normalize(vim.api.nvim_buf_get_name(0))
+  assert_eq(cur_buf, dyn_file, "opened restored file in source window")
 
-  pcall(os.remove, dyn_file)
+  pcall(vim.fn.delete, temp_dir, "rf")
   unwind.clear()
 end
 

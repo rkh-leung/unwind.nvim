@@ -154,10 +154,21 @@ function M.toggle_filter(session, saved_sessions, config)
   local old_filter = session.filter_enabled
   session.filter_enabled = not session.filter_enabled
 
-  if session.saved then
+  if session.saved and saved_sessions then
+    -- Ensure session in saved_sessions list has updated filter_enabled if session table was a loaded copy
+    for _, s in ipairs(saved_sessions) do
+      if s == session or (s.id and s.id == session.id) or (s.name and s.name == session.name) then
+        s.filter_enabled = session.filter_enabled
+      end
+    end
     local ok = sessions.save(session.root, saved_sessions)
     if not ok then
       session.filter_enabled = old_filter
+      for _, s in ipairs(saved_sessions) do
+        if s == session or (s.id and s.id == session.id) or (s.name and s.name == session.name) then
+          s.filter_enabled = old_filter
+        end
+      end
       vim.notify("Unwind: Failed to persist filter toggle to disk.", vim.log.levels.ERROR)
       return
     end

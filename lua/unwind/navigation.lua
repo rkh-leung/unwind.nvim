@@ -279,7 +279,9 @@ function M.quickfix(session)
 
     local is_missing = (file_entry and file_entry.available == false) or (frame.navigable == false)
 
-    local item_text = frame.method ~= "" and ("at " .. frame.method) or frame.raw_line
+    local method_text = (frame.method and frame.method ~= "") and ("at " .. frame.method) or nil
+    local raw_text = (frame.raw_line and frame.raw_line ~= "") and frame.raw_line or nil
+    local item_text = method_text or raw_text or (frame.file or "")
     if is_missing then
       item_text = "[N/A] " .. item_text
     end

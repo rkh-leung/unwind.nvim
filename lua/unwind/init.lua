@@ -129,7 +129,8 @@ end
 --- Rebuild runtime derived frames, files, and availability for a session
 ---@param session table
 function M.rebuild_derived(session)
-  session_actions.rebuild_derived(session, M.config, state.get_root())
+  local root = session and session.root or state.get_root()
+  session_actions.rebuild_derived(session, M.config, root)
 end
 
 --- Clear active session presentation and state
@@ -216,9 +217,10 @@ end
 
 --- Toggle vendor / library filtering for active session
 function M.toggle_filter()
-  local root = state.get_root()
-  state.ensure_sessions_loaded(root)
-  session_actions.toggle_filter(state.current(), state.raw.sessions, M.config)
+  local current_session = state.current()
+  local root = current_session and current_session.root or state.get_root()
+  local saved_sessions = state.ensure_sessions_loaded(root)
+  session_actions.toggle_filter(current_session, saved_sessions, M.config)
 end
 
 --- Activate a specific session
@@ -226,6 +228,9 @@ end
 function M.activate_session(session)
   if not session then return end
   state.set_current(session)
+  if session.root then
+    state.ensure_sessions_loaded(session.root)
+  end
 
   M.rebuild_derived(session)
   sidebar.open(session, get_sidebar_callbacks(session))
@@ -339,7 +344,7 @@ end
 --- Prompt for session name and save working session
 ---@param session table
 function M.prompt_save_session(session)
-  local root = state.get_root()
+  local root = session and session.root or state.get_root()
   state.ensure_sessions_loaded(root)
   ui.prompt_input("Save session as", session.name or "Session 1", function(name)
     local ok, err = sessions.save_working(session, name, state.raw.sessions, root)
@@ -525,20 +530,23 @@ end
 
 --- Move a frame in session
 function M.move_frame_in_session(session, from_idx, to_idx)
-  state.ensure_sessions_loaded(session.root)
-  session_actions.move_frame_in_session(session, from_idx, to_idx, state.raw.sessions, M.config)
+  local root = session and session.root or state.get_root()
+  local saved_sessions = state.ensure_sessions_loaded(root)
+  session_actions.move_frame_in_session(session, from_idx, to_idx, saved_sessions, M.config)
 end
 
 --- Replace a frame in session
 function M.replace_frame_in_session(session, frame_idx)
-  state.ensure_sessions_loaded(session.root)
-  session_actions.replace_frame_in_session(session, frame_idx, state.raw.sessions, M.config)
+  local root = session and session.root or state.get_root()
+  local saved_sessions = state.ensure_sessions_loaded(root)
+  session_actions.replace_frame_in_session(session, frame_idx, saved_sessions, M.config)
 end
 
 --- Remove a frame from a session
 function M.delete_frame_from_session(session, frame_idx)
-  state.ensure_sessions_loaded(session.root)
-  session_actions.delete_frame_from_session(session, frame_idx, state.raw.sessions, M.config)
+  local root = session and session.root or state.get_root()
+  local saved_sessions = state.ensure_sessions_loaded(root)
+  session_actions.delete_frame_from_session(session, frame_idx, saved_sessions, M.config)
 end
 
 --- Refresh file availability
