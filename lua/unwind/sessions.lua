@@ -241,9 +241,29 @@ function M.update_frame(session, index, new_frame, session_list)
   local normalized = normalize_frame(new_frame)
   return mutate(session, function(s)
     local previous = s.raw_frames[index]
-    s.raw_frames[index] = normalized
-    return function()
-      s.raw_frames[index] = previous
+    -- Update existing table in-place if previous is a table, preserving table reference identity
+    if type(previous) == "table" and type(normalized) == "table" then
+      local old_copy = {}
+      for k, v in pairs(previous) do
+        old_copy[k] = v
+        previous[k] = nil
+      end
+      for k, v in pairs(normalized) do
+        previous[k] = v
+      end
+      return function()
+        for k in pairs(previous) do
+          previous[k] = nil
+        end
+        for k, v in pairs(old_copy) do
+          previous[k] = v
+        end
+      end
+    else
+      s.raw_frames[index] = normalized
+      return function()
+        s.raw_frames[index] = previous
+      end
     end
   end, session_list)
 end

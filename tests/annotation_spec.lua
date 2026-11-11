@@ -21,7 +21,9 @@ local decorator = require("unwind.decorator")
 local sidebar = require("unwind.sidebar")
 local unwind = require("unwind")
 
-local test_root = vim.fs.normalize(vim.fn.getcwd())
+-- Use a dedicated isolated temporary directory for test storage so user sessions are never touched
+local test_root = vim.fs.normalize(vim.fn.tempname() .. "_unwind_ann_test")
+vim.fn.mkdir(test_root, "p")
 local storage_file = sessions.storage_path(test_root)
 
 print("--> [Annotation Spec 1] Frame creation without note, adding note, updating note, removing note...")
@@ -137,18 +139,19 @@ do
   -- Replace frame 2: note should be preserved if not explicitly overwritten
   unwind.clear()
   unwind.activate_session(s)
-  local dummy_path = test_root .. "/tests/fixtures/dummy.txt"
-  local dummy_buf = vim.fn.bufnr(dummy_path)
-  if dummy_buf == -1 then
-    dummy_buf = vim.api.nvim_create_buf(false, true)
-    pcall(vim.api.nvim_buf_set_name, dummy_buf, dummy_path)
-  end
-  vim.api.nvim_set_current_buf(dummy_buf)
+  -- Create real file in test_root so check_file_availability and replace_frame succeed
+  local dummy_file = test_root .. "/dummy.txt"
+  local f_dummy = io.open(dummy_file, "w")
+  f_dummy:write("dummy line\n")
+  f_dummy:close()
+
+  vim.cmd.edit(vim.fn.fnameescape(dummy_file))
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
 
   unwind.replace_frame_in_session(s, 2)
   assert_eq(s.raw_frames[2].note, "Note for F1", "replacing frame preserved existing note")
 
+  pcall(os.remove, dummy_file)
   unwind.clear()
 end
 
@@ -307,8 +310,142 @@ do
   assert_eq(prompt_default, "Simulated annotation note", "prepopulated with existing note")
   assert_eq(s.frames[1].note, "Simulated annotation note", "canceling prompt leaves note unchanged")
 
-  -- Restore ui.prompt_input
+  -- Test sidebar 'a' keybinding
+  unwind.toggle_sidebar()
+  local side_win = nil
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    if sidebar.is_sidebar_window(w) then
+      side_win = w
+      break
+    end
+  end
+  assert_true(side_win ~= nil, "sidebar window open")
+  -- Position cursor on frame 1 in sidebar (line 3)
+  vim.api.nvim_win_set_cursor(side_win, { 3, 0 })
+
+  prompt_called = false
+  ui.prompt_input = function(title, default_val, on_submit)
+    prompt_called = true
+    prompt_default = default_val
+    on_submit("Annotation via sidebar keybinding 'a'")
+  end
+
+  vim.api.nvim_win_call(side_win, function()
+    vim.cmd([[execute "normal a"]])
+  end)
+
+  assert_true(prompt_called, "sidebar 'a' keybinding invoked prompt_input")
+  assert_eq(s.frames[1].note, "Annotation via sidebar keybinding 'a'", "note updated via 'a' keybinding")
+
+  sidebar.hide()
   ui.prompt_input = orig_prompt
+  unwind.clear()
+end
+
+print("--> [Annotation Spec 8] Pending annotation targeting a reordered frame preserves frame identity...")
+do
+  unwind.clear()
+  unwind.ingest([[
+  File "tests/fixtures/dummy.txt", line 1, in func_a
+  File "tests/fixtures/dummy.txt", line 1, in func_b
+]])
+  local s = unwind.state.active_session
+  assert_eq(#s.frames, 2, "2 frames initially")
+  local frame_a = s.frames[1]
+  local frame_b = s.frames[2]
+
+  local ui = require("unwind.ui")
+  local orig_prompt = ui.prompt_input
+  local captured_submit = nil
+
+  ui.prompt_input = function(title, default_val, on_submit)
+    captured_submit = on_submit
+  end
+
+  -- Start annotating frame 1 (func_a)
+  unwind.annotate(1)
+  assert_true(captured_submit ~= nil, "annotation prompt opened for frame 1")
+
+  -- Now reorder frames: move frame 1 down to index 2 BEFORE submitting
+  unwind.move_frame_in_session(s, 1, 2)
+  assert_eq(s.frames[1].method, "func_b", "frame 1 is now func_b")
+  assert_eq(s.frames[2].method, "func_a", "frame 2 is now func_a")
+
+  -- Submit the pending annotation
+  captured_submit("Note intended for func_a")
+
+  -- Verify annotation was attached to frame_a (by identity), NOT frame_b
+  assert_eq(frame_a.note, "Note intended for func_a", "frame_a received the note despite position change")
+  assert_eq(frame_b.note, nil, "frame_b at old position 1 was NOT modified")
+
+  ui.prompt_input = orig_prompt
+  unwind.clear()
+end
+
+print("--> [Annotation Spec 9] Session switch while prompt is pending aborts cleanly...")
+do
+  unwind.clear()
+  unwind.ingest('File "tests/fixtures/dummy.txt", line 1, in s1_func\n')
+  local s1 = unwind.state.active_session
+
+  local ui = require("unwind.ui")
+  local orig_prompt = ui.prompt_input
+  local captured_submit = nil
+
+  ui.prompt_input = function(title, default_val, on_submit)
+    captured_submit = on_submit
+  end
+
+  -- Start annotating s1
+  unwind.annotate(1)
+  assert_true(captured_submit ~= nil, "prompt opened for s1")
+
+  -- Switch active session by ingesting a new session
+  unwind.ingest('File "tests/fixtures/dummy.txt", line 1, in s2_func\n')
+  local s2 = unwind.state.active_session
+  assert_true(s1 ~= s2, "active session switched to s2")
+
+  -- Now submit the pending prompt from s1
+  captured_submit("Stale session annotation")
+
+  -- Assert s1 was NOT modified and s2 was NOT modified
+  assert_eq(s1.frames[1].note, nil, "s1 note remained nil because session was inactive")
+  assert_eq(s2.frames[1].note, nil, "s2 was not contaminated by stale prompt")
+
+  ui.prompt_input = orig_prompt
+  unwind.clear()
+end
+
+print("--> [Annotation Spec 10] Transactional rollback on annotation persistence failure...")
+do
+  local test_sessions = require("unwind.sessions")
+  local test_persistence = require("unwind.persistence")
+  local orig_save = test_persistence.save
+  pcall(os.remove, storage_file)
+
+  unwind.clear()
+  unwind.ingest('File "tests/fixtures/dummy.txt", line 1, in func_persist\n')
+  local s = unwind.state.active_session
+  unwind.ensure_sessions_loaded(test_root)
+  test_sessions.save_working(s, "Persist Rollback Test", unwind.state.sessions, test_root)
+
+  -- Frame initially has no note
+  assert_eq(s.raw_frames[1].note, nil, "raw frame starts without note")
+
+  -- Make persistence fail
+  test_persistence.save = function() return false end
+
+  -- Attempt to annotate frame
+  local ok_ann = require("unwind.session_actions").annotate_frame_in_session(s, 1, "Should Rollback", unwind.state.sessions, unwind.config)
+  assert_true(not ok_ann, "annotate_frame_in_session should fail when disk write fails")
+
+  -- Verify in-memory raw frame rolled back to nil
+  assert_eq(s.raw_frames[1].note, nil, "raw_frame.note rolled back to nil after persistence failure")
+
+  -- Restore save function and cleanup
+  test_persistence.save = orig_save
+  test_sessions.delete(s, unwind.state.sessions, test_root)
+  pcall(os.remove, storage_file)
   unwind.clear()
 end
 

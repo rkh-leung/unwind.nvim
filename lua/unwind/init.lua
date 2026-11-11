@@ -366,56 +366,18 @@ function M.annotate(frame_idx, session)
     return
   end
 
-  local target_session_id = session.id
-  local target_raw_index = target_frame.raw_index
   local current_note = target_frame.note or ""
 
   ui.prompt_input("Annotate frame", current_note, function(input_text)
-    -- Verify active/target session didn't switch under prompt
-    local cur_sess = state.current()
-    if not cur_sess or cur_sess.id ~= target_session_id then
-      -- If current is not same session, try to update target session if still exists
-      if session.id ~= target_session_id then
-        return
-      end
-    end
-
-    local sess = (cur_sess and cur_sess.id == target_session_id) and cur_sess or session
-    -- Find the frame with matching raw_index in sess.frames
-    local resolved_frame_idx = nil
-    for idx, f in ipairs(sess.frames or {}) do
-      if f.raw_index == target_raw_index then
-        resolved_frame_idx = idx
-        break
-      end
-    end
-
-    if not resolved_frame_idx then
-      -- If filtered or missing, check raw_frames directly
-      if sess.raw_frames and sess.raw_frames[target_raw_index] then
-        local root = sess.root or state.get_root()
-        local saved_sessions = state.ensure_sessions_loaded(root)
-        local existing_raw = sess.raw_frames[target_raw_index]
-        local clean_note = nil
-        if input_text ~= nil then
-          local trimmed = vim.trim(tostring(input_text))
-          if trimmed ~= "" then
-            clean_note = trimmed
-          end
-        end
-        existing_raw.note = clean_note
-        if sess.saved and saved_sessions then
-          sessions.save(root, saved_sessions)
-        end
-        M.rebuild_derived(sess)
-        sidebar.render(sess)
-      end
+    -- Finding 3: Abort if target session is no longer active
+    if state.current() ~= session then
       return
     end
 
-    local root = sess.root or state.get_root()
+    -- Finding 2 & 4: Route update through transactional annotate_frame_in_session using target_frame identity
+    local root = session.root or state.get_root()
     local saved_sessions = state.ensure_sessions_loaded(root)
-    session_actions.annotate_frame_in_session(sess, resolved_frame_idx, input_text, saved_sessions, M.config)
+    session_actions.annotate_frame_in_session(session, target_frame, input_text, saved_sessions, M.config)
   end)
 end
 

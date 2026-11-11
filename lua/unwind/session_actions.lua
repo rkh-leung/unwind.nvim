@@ -310,18 +310,52 @@ end
 
 --- Annotate a frame in session
 ---@param session table
----@param frame_idx number
+---@param frame_idx_or_target number|table Frame index in session.frames or the frame object itself
 ---@param note_text? string
 ---@param saved_sessions table[]
 ---@param config table
 ---@return boolean ok
-function M.annotate_frame_in_session(session, frame_idx, note_text, saved_sessions, config)
-  if not session or not session.frames or not session.frames[frame_idx] then
+function M.annotate_frame_in_session(session, frame_idx_or_target, note_text, saved_sessions, config)
+  if not session then
     return false
   end
 
-  local target_frame = session.frames[frame_idx]
-  local raw_idx = target_frame.raw_index
+  local target_frame = nil
+  local frame_idx = nil
+
+  if type(frame_idx_or_target) == "table" then
+    target_frame = frame_idx_or_target
+    for idx, f in ipairs(session.frames or {}) do
+      if f == target_frame or f.raw_index == target_frame.raw_index then
+        frame_idx = idx
+        break
+      end
+    end
+  elseif type(frame_idx_or_target) == "number" then
+    frame_idx = frame_idx_or_target
+    target_frame = session.frames and session.frames[frame_idx]
+  end
+
+  if not target_frame then
+    return false
+  end
+
+  -- Locate raw_idx stably by object identity first, falling back to raw_index
+  local raw_idx = nil
+  for idx, rf in ipairs(session.raw_frames or {}) do
+    if rf == target_frame then
+      raw_idx = idx
+      break
+    end
+  end
+
+  if not raw_idx and target_frame.raw_index and session.raw_frames and session.raw_frames[target_frame.raw_index] then
+    local candidate = session.raw_frames[target_frame.raw_index]
+    if candidate == target_frame or (candidate.path == target_frame.path and candidate.line == target_frame.line and candidate.col == target_frame.col and candidate.method == target_frame.method) then
+      raw_idx = target_frame.raw_index
+    end
+  end
+
   if not raw_idx or not session.raw_frames or not session.raw_frames[raw_idx] then
     return false
   end
@@ -361,8 +395,17 @@ function M.annotate_frame_in_session(session, frame_idx, note_text, saved_sessio
   M.rebuild_derived(session, config)
   sidebar.render(session)
 
-  if session.active_index == frame_idx then
-    navigation.jump_to_frame(session, frame_idx)
+  -- Find where the frame is in derived frames now
+  local updated_visible_idx = nil
+  for idx, f in ipairs(session.frames or {}) do
+    if f.raw_index == raw_idx then
+      updated_visible_idx = idx
+      break
+    end
+  end
+
+  if updated_visible_idx and session.active_index == updated_visible_idx then
+    navigation.jump_to_frame(session, updated_visible_idx)
   end
 
   return true
