@@ -4,16 +4,16 @@
 local M = {}
 
 local listeners = {}
+local next_listener_id = 0
 
 --- Register an event listener
 ---@param event string
 ---@param callback fun(...)
 ---@return integer id Listener subscription ID
 function M.on(event, callback)
-  if not listeners[event] then
-    listeners[event] = {}
-  end
-  local id = #listeners[event] + 1
+  listeners[event] = listeners[event] or {}
+  next_listener_id = next_listener_id + 1
+  local id = next_listener_id
   listeners[event][id] = callback
   return id
 end
@@ -44,6 +44,7 @@ end
 --- Clear all listeners (for testing/reset)
 function M.clear_all()
   listeners = {}
+  next_listener_id = 0
 end
 
 return M

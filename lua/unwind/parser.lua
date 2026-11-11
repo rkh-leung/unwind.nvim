@@ -25,124 +25,71 @@ function M.is_non_navigable_path(path)
 end
 
 --- Check if a file is readable or exists
----@param path string
----@return boolean
-local function file_exists(path)
-  if not path or path == "" then
-    return false
-  end
-  if M.is_non_navigable_path(path) then
-    return false
-  end
-  if vim.uv and vim.uv.fs_stat then
-    local stat = vim.uv.fs_stat(path)
-    return stat ~= nil
-  elseif vim.loop and vim.loop.fs_stat then
-    local stat = vim.loop.fs_stat(path)
-    return stat ~= nil
-  end
-  return vim.fn.filereadable(path) == 1
-end
+local path_util = require("unwind.path")
 
---- Canonicalize path lexical components:
---- Replaces backslashes with forward slashes, strips duplicate slashes and redundant ./,
---- resolves .. segments where possible.
----@param path string
----@return string
+--- Backwards-compatible canonicalize_lexical function
 local function canonicalize_lexical(path)
-  if not path or path == "" then
-    return path
-  end
-  local p = path:gsub("\\", "/")
-  -- Preserve leading slash or drive letter
-  local is_abs_unix = p:sub(1, 1) == "/"
-  local drive, rest = p:match("^([%a]:)/(.*)")
-  if drive then
-    p = "/" .. rest
-  end
-
-  local parts = {}
-  for part in p:gmatch("[^/]+") do
-    if part == "." then
-      -- skip
-    elseif part == ".." then
-      if #parts > 0 and parts[#parts] ~= ".." then
-        table.remove(parts)
-      elseif not is_abs_unix and not drive then
-        table.insert(parts, "..")
-      end
-    else
-      table.insert(parts, part)
-    end
-  end
-
-  local res = table.concat(parts, "/")
-  if drive then
-    res = drive .. "/" .. res
-  elseif is_abs_unix then
-    res = "/" .. res
-  end
-  return res ~= "" and res or (is_abs_unix and "/" or ".")
+  return path_util.canonicalize(path)
 end
 
---- Compiles and sorts path mappings longest-prefix first
+--- Compiles and sorts path mappings longest-prefix first (backwards-compatible)
 ---@param mappings? table<string, string>
----@return table[] sorted_mappings List of { prefix, target, is_prefix_dir }
+---@return table[] sorted_mappings List of { prefix, target }
 function M.compile_path_mappings(mappings)
-  if not mappings then
-    return {}
-  end
-  local compiled = {}
-  for prefix, target in pairs(mappings) do
-    local norm_prefix = prefix:gsub("\\", "/")
-    local norm_target = target:gsub("\\", "/")
-    table.insert(compiled, {
-      prefix = norm_prefix,
-      target = norm_target,
-    })
-  end
-  table.sort(compiled, function(a, b)
-    return #a.prefix > #b.prefix
-  end)
-  return compiled
+  return path_util.compile_mappings(mappings)
 end
 
 --- Normalizes a file path:
 --- Strips container / virtual prefixes (e.g. /app/, /var/task/, C:\workspace\)
 --- if a corresponding relative path exists within Neovim's cwd / root.
---- Also supports configurable path_mappings and memoizes resolutions.
+--- Also supports configurable path_mappings, per-operation stat cache, and memoizes resolutions.
 --- Returns:
 ---   display_path: string (relative or display presentation)
 ---   resolved_path: string (canonical resolved filesystem path or best canonicalized path)
 ---   navigable: boolean (whether resolved_path points to an actual file or is a non-navigable pseudo-path)
+---   metadata: table? (optional enrichment from language resolvers: external, source_kind, resolution)
 ---@param raw_path string
----@param opts? { root?: string, path_mappings?: table<string, string>, compiled_mappings?: table[], cache?: table<string, table> }
+---@param opts? { root?: string, path_mappings?: table<string, string>, compiled_mappings?: table[], cache?: table<string, table>, stat_cache?: table<string, boolean> }
 ---@return string display_path
 ---@return string resolved_path
 ---@return boolean navigable
+---@return table? metadata
 function M.resolve_and_normalize_path(raw_path, opts)
   if not raw_path or raw_path == "" then
-    return raw_path, raw_path, false
+    return raw_path, raw_path, false, nil
   end
 
   opts = opts or {}
   local cache = opts.cache
   if cache and cache[raw_path] then
     local entry = cache[raw_path]
-    return entry.display, entry.resolved, entry.navigable
+    return entry.display, entry.resolved, entry.navigable, entry.metadata
   end
 
-  local function store_cache(display, resolved, navigable)
+  local stat_cache = opts.stat_cache
+  local function file_exists(p)
+    if not p or p == "" or M.is_non_navigable_path(p) then
+      return false
+    end
+    return path_util.is_file(p, stat_cache)
+  end
+
+  local function store_cache(display, resolved, navigable, metadata)
     display = canonicalize_lexical(display)
     resolved = canonicalize_lexical(resolved)
     if cache then
-      cache[raw_path] = { display = display, resolved = resolved, navigable = navigable }
+      cache[raw_path] = {
+        display = display,
+        resolved = resolved,
+        navigable = navigable,
+        metadata = metadata,
+      }
     end
-    return display, resolved, navigable
+    return display, resolved, navigable, metadata
   end
 
   if M.is_non_navigable_path(raw_path) then
-    return store_cache(raw_path, raw_path, false)
+    return store_cache(raw_path, raw_path, false, nil)
   end
 
   local normalized = canonicalize_lexical(raw_path)
@@ -153,7 +100,7 @@ function M.resolve_and_normalize_path(raw_path, opts)
     root = root .. "/"
   end
 
-  local is_windows = vim.fn.has("win32") == 1 or normalized:match("^%a:[/\\]") or root:match("^%a:[/\\]")
+  local is_windows = path_util.is_windows_path(normalized) or path_util.is_windows_path(root)
 
   -- 1. Apply explicit path_mappings if provided
   local compiled_mappings = opts.compiled_mappings
@@ -197,7 +144,7 @@ function M.resolve_and_normalize_path(raw_path, opts)
           resolved = canonicalize_lexical(root .. candidate)
         end
         local exists = file_exists(candidate) or file_exists(resolved)
-        return store_cache(candidate, resolved, exists)
+        return store_cache(candidate, resolved, exists, nil)
       end
     end
   end
@@ -211,7 +158,7 @@ function M.resolve_and_normalize_path(raw_path, opts)
     local rel = normalized:sub(#root + 1)
     if file_exists(rel) or file_exists(root .. rel) or file_exists(normalized) then
       local abs = file_exists(normalized) and normalized or canonicalize_lexical(root .. rel)
-      return store_cache(rel, abs, true)
+      return store_cache(rel, abs, true, nil)
     end
   end
 
@@ -225,7 +172,7 @@ function M.resolve_and_normalize_path(raw_path, opts)
     if is_in_root then
       display = normalized:sub(#root + 1)
     end
-    return store_cache(display, abs, true)
+    return store_cache(display, abs, true, nil)
   end
 
   -- If buffer already loaded in Neovim matching normalized path or root .. normalized
@@ -245,7 +192,24 @@ function M.resolve_and_normalize_path(raw_path, opts)
     if is_in_root then
       display = normalized:sub(#root + 1)
     end
-    return store_cache(display, abs_cand, true)
+    return store_cache(display, abs_cand, true, nil)
+  end
+
+  -- Check language resolvers (e.g. Ruby gems, git gems, stdlib)
+  local ok_ruby, ruby_resolver = pcall(require, "unwind.resolvers.ruby")
+  if ok_ruby and ruby_resolver and ruby_resolver.resolve then
+    local r_res = ruby_resolver.resolve(raw_path, { root = root })
+    if r_res and r_res.path and file_exists(r_res.path) then
+      local display = normalized
+      if is_in_root then
+        display = normalized:sub(#root + 1)
+      end
+      return store_cache(display, r_res.path, true, {
+        external = true,
+        source_kind = r_res.source_kind,
+        resolution = r_res.resolution,
+      })
+    end
   end
 
   -- Common container / build prefixes to strip
@@ -274,7 +238,7 @@ function M.resolve_and_normalize_path(raw_path, opts)
       if stripped_segments_count >= 2 or orig_segments_count <= 2 then
         local abs_candidate = canonicalize_lexical(root .. stripped)
         if file_exists(stripped) or file_exists(abs_candidate) then
-          return store_cache(stripped, abs_candidate, true)
+          return store_cache(stripped, abs_candidate, true, nil)
         end
       end
     end
@@ -291,21 +255,8 @@ function M.resolve_and_normalize_path(raw_path, opts)
       local sub_path = table.concat(segments, "/", i)
       local abs_candidate = canonicalize_lexical(root .. sub_path)
       if file_exists(sub_path) or file_exists(abs_candidate) then
-        return store_cache(sub_path, abs_candidate, true)
+        return store_cache(sub_path, abs_candidate, true, nil)
       end
-    end
-  end
-
-  -- Check language resolvers (e.g. Ruby gems, git gems, stdlib)
-  local ok_ruby, ruby_resolver = pcall(require, "unwind.resolvers.ruby")
-  if ok_ruby and ruby_resolver and ruby_resolver.resolve then
-    local r_res = ruby_resolver.resolve(raw_path, { root = root })
-    if r_res and r_res.path and file_exists(r_res.path) then
-      local display = normalized
-      if is_in_root then
-        display = normalized:sub(#root + 1)
-      end
-      return store_cache(display, r_res.path, true)
     end
   end
 
@@ -314,7 +265,7 @@ function M.resolve_and_normalize_path(raw_path, opts)
   if normalized:sub(1, 1) ~= "/" and not normalized:match("^%a:[/\\]") then
     abs = canonicalize_lexical(root .. normalized)
   end
-  return store_cache(normalized, abs, false)
+  return store_cache(normalized, abs, false, nil)
 end
 
 --- Backwards-compatible normalize_path function
@@ -564,29 +515,59 @@ function M.parse(text, opts)
 
   local compiled_mappings = opts.path_mappings and M.compile_path_mappings(opts.path_mappings) or nil
   local cache = {}
+  local stat_cache = opts.stat_cache or {}
   local norm_opts = {
     root = opts.root,
     compiled_mappings = compiled_mappings,
     cache = cache,
+    stat_cache = stat_cache,
   }
 
   local max_frames = opts.max_frames or 1000
 
   -- State machine for per-block Python traceback parsing
+  -- Fixed-capacity ring buffer to avoid O(N) shifting via table.remove(..., 1)
+  -- Python traceback is outermost -> innermost; Unwind requires innermost -> outermost.
+  -- When capacity is exceeded, the ring buffer overwrites oldest items (the outermost frames),
+  -- retaining the innermost max_frames frames in O(1) time.
   local in_python_block = false
-  -- python_block_frames holds at most max_frames items
-  local python_block_frames = {}
+  local ring_buffer = {}
+  local ring_size = 0
+  local ring_head = 0 -- index of oldest item in 0-indexed ring
+
+  local function ring_push(item, capacity)
+    if capacity <= 0 then return end
+    if ring_size < capacity then
+      local idx = (ring_head + ring_size) % capacity
+      ring_buffer[idx] = item
+      ring_size = ring_size + 1
+    else
+      -- Overwrite oldest item (advance head)
+      ring_buffer[ring_head] = item
+      ring_head = (ring_head + 1) % capacity
+    end
+  end
+
+  local function ring_clear()
+    ring_buffer = {}
+    ring_size = 0
+    ring_head = 0
+  end
 
   local function flush_python_block()
-    if #python_block_frames > 0 then
+    if ring_size > 0 then
       local remaining_capacity = math.max(0, max_frames - #frames)
-      local count_to_keep = math.min(#python_block_frames, remaining_capacity)
-      local start_idx = #python_block_frames - count_to_keep + 1
+      local count_to_take = math.min(ring_size, remaining_capacity)
+      local capacity = math.max(1, max_frames)
 
-      for i = #python_block_frames, start_idx, -1 do
-        table.insert(frames, python_block_frames[i])
+      -- Ring contains items in input order: oldest (outermost) to newest (innermost).
+      -- We want to iterate from newest (innermost) backwards to oldest (outermost).
+      -- Last pushed item is at offset (ring_size - 1):
+      for offset = ring_size - 1, ring_size - count_to_take, -1 do
+        local idx = (ring_head + offset) % capacity
+        table.insert(frames, ring_buffer[idx])
       end
-      python_block_frames = {}
+      ring_clear()
     end
     in_python_block = false
   end
@@ -645,39 +626,25 @@ function M.parse(text, opts)
 
         if matched_frame then
           local original_path = matched_frame.file
-          local display, resolved, navigable = M.resolve_and_normalize_path(original_path, norm_opts)
-
-          -- Check Ruby language resolver for metadata enrichment
-          local ok_ruby, ruby_resolver = pcall(require, "unwind.resolvers.ruby")
-          local ruby_meta = nil
-          if ok_ruby and ruby_resolver and ruby_resolver.resolve then
-            ruby_meta = ruby_resolver.resolve(original_path, { root = opts.root })
-          end
+          local display, resolved, navigable, metadata =
+            M.resolve_and_normalize_path(original_path, norm_opts)
 
           matched_frame.raw_line = line
           matched_frame.path = original_path
           matched_frame.file = display
-          if ruby_meta and ruby_meta.path then
-            matched_frame.resolved_path = ruby_meta.path
-            matched_frame.navigable = true
-            matched_frame.external = true
-            matched_frame.source_kind = ruby_meta.source_kind
-            matched_frame.resolution = ruby_meta.resolution
-          else
-            matched_frame.resolved_path = resolved
-            matched_frame.navigable = navigable
+          matched_frame.resolved_path = resolved
+          matched_frame.navigable = navigable
+
+          if metadata then
+            matched_frame.external = metadata.external
+            matched_frame.source_kind = metadata.source_kind
+            matched_frame.resolution = metadata.resolution
           end
           matched_frame.method = matched_frame.method or ""
 
           if is_python_frame then
-            -- Bounded storage: keep only the last max_frames items
             local remaining_budget = math.max(0, max_frames - #frames)
-            if remaining_budget > 0 then
-              if #python_block_frames >= remaining_budget then
-                table.remove(python_block_frames, 1)
-              end
-              table.insert(python_block_frames, matched_frame)
-            end
+            ring_push(matched_frame, remaining_budget)
           else
             if #frames < max_frames then
               table.insert(frames, matched_frame)

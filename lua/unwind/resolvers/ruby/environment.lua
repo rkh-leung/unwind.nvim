@@ -11,8 +11,18 @@ local system = require("unwind.resolvers.ruby.managers.system")
 local M = {}
 
 --- Cache probed environments per project root
---- Key: canonical root path -> RubyEnv table
+--- Key: canonical root path -> RubyEnv table | false (negative cache sentinel)
 M.env_cache = {}
+
+--- Invalidate Ruby environment cache
+---@param root? string Optional project root to invalidate, or nil for all
+function M.invalidate(root)
+  if root then
+    M.env_cache[vim.fs.normalize(root)] = nil
+  else
+    M.env_cache = {}
+  end
+end
 
 --- Reads the entire content of a file if it exists
 ---@param path string
@@ -200,25 +210,29 @@ function M.probe_ruby(ruby_bin)
 end
 
 --- Get or load the Ruby environment for a project root (cached)
+--- Uses `false` as negative-cache sentinel to prevent repeated failed discovery
 ---@param root string
 ---@param force_reload? boolean
 ---@return table? RubyEnv
 function M.get_environment(root, force_reload)
   root = vim.fs.normalize(root)
-  if not force_reload and M.env_cache[root] then
-    return M.env_cache[root]
+
+  if force_reload then
+    M.invalidate(root)
+  elseif M.env_cache[root] ~= nil then
+    return M.env_cache[root] or nil
   end
 
   local ver_info = M.discover_ruby_version(root)
   local exec_info = M.detect_ruby_executable(root, ver_info.version)
   if not exec_info then
-    M.env_cache[root] = nil
+    M.env_cache[root] = false
     return nil
   end
 
   local probe = M.probe_ruby(exec_info.ruby_bin)
   if not probe then
-    M.env_cache[root] = nil
+    M.env_cache[root] = false
     return nil
   end
 

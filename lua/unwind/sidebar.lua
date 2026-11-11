@@ -4,10 +4,13 @@
 
 local M = {}
 
+local text_util = require("unwind.text")
+
 local sidebar_win = nil
 local sidebar_buf = nil
 local remembered_source_win = nil
 local ns_sidebar = vim.api.nvim_create_namespace("unwind_sidebar")
+local ns_active = vim.api.nvim_create_namespace("unwind_sidebar_active")
 
 --- Set up highlight groups if not yet defined
 local function setup_highlights()
@@ -144,16 +147,12 @@ function M.render(session)
       -- Compute fit
       local row_content
       if loc_str ~= "" then
-        row_content = string.format("  %s %s  %s", num_str, status_str, loc_str)
-        if strwidth(row_content) > win_width and win_width > 12 then
+        local base_w = strwidth(string.format("  %s   %s", num_str, loc_str))
+        if base_w + strwidth(status_str) > win_width and win_width > 12 then
           local max_status_w = math.max(4, win_width - strwidth(num_str) - strwidth(loc_str) - 8)
-          local trunc_status = status_str
-          while strwidth(trunc_status) > max_status_w and #trunc_status > 0 do
-            trunc_status = trunc_status:sub(1, -2)
-          end
-          status_str = trunc_status
-          row_content = string.format("  %s %s  %s", num_str, status_str, loc_str)
+          status_str = text_util.truncate_display(status_str, max_status_w)
         end
+        row_content = string.format("  %s %s  %s", num_str, status_str, loc_str)
       else
         row_content = string.format("  %s %s", num_str, status_str)
       end
@@ -233,7 +232,6 @@ function M.set_active(session, index)
   end
 
   -- Apply active highlight line
-  local ns_active = vim.api.nvim_create_namespace("unwind_sidebar_active")
   vim.api.nvim_buf_clear_namespace(buf, ns_active, 0, -1)
 
   local file_entry = (frames[index].file_index and session.files) and session.files[frames[index].file_index] or nil

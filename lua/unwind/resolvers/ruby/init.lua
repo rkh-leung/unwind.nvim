@@ -9,6 +9,31 @@ local stdlib = require("unwind.resolvers.ruby.stdlib")
 
 local M = {}
 
+--- Per-root resolution cache
+local resolution_cache = {}
+
+local function cache_for_root(root)
+  root = vim.fs.normalize(root)
+  if not resolution_cache[root] then
+    resolution_cache[root] = {}
+  end
+  return resolution_cache[root]
+end
+
+--- Invalidate resolution and environment caches for root or all
+---@param root? string
+function M.invalidate(root)
+  if root then
+    root = vim.fs.normalize(root)
+    resolution_cache[root] = nil
+    environment.invalidate(root)
+  else
+    resolution_cache = {}
+    environment.invalidate()
+  end
+  git_gems.clear_cache()
+end
+
 --- Public API: resolve a stack frame path to a local Ruby file
 ---@param frame_path string
 ---@param opts? { root?: string, force_reload?: boolean }
@@ -20,6 +45,22 @@ function M.resolve(frame_path, opts)
 
   opts = opts or {}
   local root = opts.root or vim.fs.normalize(vim.fn.getcwd())
+  root = vim.fs.normalize(root)
+
+  if opts.force_reload then
+    M.invalidate(root)
+  end
+
+  local cache = cache_for_root(root)
+  local cached = cache[frame_path]
+  if cached ~= nil then
+    return cached or nil
+  end
+
+  local function store(res)
+    cache[frame_path] = res or false
+    return res
+  end
 
   -- 1. Try parsing path pattern before loading/probing environment (fast fail)
   local parsed_gem = ruby_path.parse_gem_path(frame_path)
@@ -27,20 +68,20 @@ function M.resolve(frame_path, opts)
   local parsed_stdlib = not parsed_gem and not parsed_git_gem and ruby_path.parse_stdlib_path(frame_path) or nil
 
   if not parsed_gem and not parsed_git_gem and not parsed_stdlib then
-    return nil
+    return store(nil)
   end
 
   -- 2. Obtain cached or probed Ruby environment for this root
-  local env = environment.get_environment(root, opts.force_reload)
+  local env = environment.get_environment(root, false)
   if not env then
-    return nil
+    return store(nil)
   end
 
   -- 3. Resolve regular gem
   if parsed_gem then
     local res = gems.resolve(parsed_gem, env)
     if res then
-      return {
+      return store({
         path = res.path,
         kind = "gem",
         source_kind = "ruby_gem",
@@ -54,7 +95,7 @@ function M.resolve(frame_path, opts)
           gem = res.gem,
           gem_version = res.gem_version,
         },
-      }
+      })
     end
   end
 
@@ -62,7 +103,7 @@ function M.resolve(frame_path, opts)
   if parsed_git_gem then
     local res = git_gems.resolve(parsed_git_gem, env)
     if res then
-      return {
+      return store({
         path = res.path,
         kind = "bundler_git_gem",
         source_kind = "ruby_bundler_git",
@@ -76,7 +117,7 @@ function M.resolve(frame_path, opts)
           gem = res.gem,
           revision = res.revision,
         },
-      }
+      })
     end
   end
 
@@ -84,7 +125,7 @@ function M.resolve(frame_path, opts)
   if parsed_stdlib then
     local res = stdlib.resolve(parsed_stdlib, env)
     if res then
-      return {
+      return store({
         path = res.path,
         kind = "stdlib",
         source_kind = "ruby_stdlib",
@@ -96,11 +137,11 @@ function M.resolve(frame_path, opts)
           ruby_version = env.ruby_version,
           stdlib_module = res.module,
         },
-      }
+      })
     end
   end
 
-  return nil
+  return store(nil)
 end
 
 --- Get environment info for diagnostics

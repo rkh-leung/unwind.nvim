@@ -31,15 +31,22 @@ unwind.nvim/
 ├── plugin/
 │   └── unwind.lua       # Auto-loaded entry point registering Vim commands (:UnwindAdd, etc.)
 ├── lua/unwind/
-│   ├── init.lua         # Plugin lifecycle, state orchestration, navigation controller, public API
-│   ├── sessions.lua     # Central session model, mutation API, and atomic persistence layer
-│   ├── events.lua       # Lightweight internal pub/sub event bus for session state changes
-│   ├── location.lua     # Tree-sitter function resolver and cursor location extraction
-│   ├── sidebar.lua      # Yazi-style persistent right-hand call-trace sidebar and path editor
-│   ├── parser.lua       # Multi-language stacktrace pattern matcher and path normalizer
-│   ├── collector.lua    # Frame aggregation, file deduplication, and vendor filtering logic
-│   ├── decorator.lua    # Neovim extmarks & virt_lines inline telemetry projection
-│   ├── ui.lua           # Session manager floating menu, scratchpad input float, and name prompts
+│   ├── init.lua         # Public API facade and high-level orchestration
+│   ├── state.lua        # Multi-root session state tracking and lifecycle
+│   ├── ingest.lua       # Ingestion from clipboard, text, files, and ranges
+│   ├── navigation.lua   # Buffer jumping, cursor positioning, and frame cycling
+│   ├── session_actions.lua # Frame mutations, filter reapplication, refresh
+│   ├── sessions.lua     # Session domain model and mutation rollback
+│   ├── persistence.lua  # Atomic JSON disk persistence layer
+│   ├── events.lua       # Monotonic event bus for session state changes
+│   ├── location.lua     # Tree-sitter function resolver and cursor extraction
+│   ├── sidebar.lua      # Persistent right-hand call-trace sidebar
+│   ├── parser.lua       # Stacktrace pattern matcher with ring buffer
+│   ├── path.lua         # Canonical path and filesystem stat cache
+│   ├── collector.lua    # Frame aggregation, deduplication, and vendor filtering
+│   ├── decorator.lua    # Neovim extmarks & virt_lines inline telemetry
+│   ├── text.lua         # UTF-8 safe display width truncation
+│   ├── ui.lua           # Floating UI modals and prompts
 │   └── resolvers/       # Multi-tiered path resolution subsystem
 │       ├── init.lua     # Central resolver chain (workspace -> mappings -> language)
 │       ├── workspace.lua # Workspace path normalizer and container prefix stripper
