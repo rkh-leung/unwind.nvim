@@ -259,14 +259,16 @@ function M.resolve_and_normalize_path(raw_path, opts)
   end
 
   local seg_count = #segments
-  if seg_count > 2 then
-    for i = 2, seg_count do
-      if (seg_count - i + 1) >= 2 or seg_count <= 2 then
-        local sub_path = table.concat(segments, "/", i)
-        local abs_candidate = root .. sub_path
-        if file_exists(sub_path) or file_exists(abs_candidate) then
-          return store_cache(sub_path, abs_candidate, true, nil)
-        end
+
+  for i = 2, seg_count do
+    local remaining = seg_count - i + 1
+
+    if remaining >= 2 or seg_count <= 2 then
+      local sub_path = table.concat(segments, "/", i)
+      local abs_candidate = canonicalize_lexical(root .. sub_path)
+
+      if file_exists(sub_path) or file_exists(abs_candidate) then
+        return store_cache(sub_path, abs_candidate, true, nil)
       end
     end
   end
@@ -438,10 +440,13 @@ local matchers = {
   -- support paths with spaces, @, +, (), etc.
   -- enforce that file extension begins with an alphabetical character to prevent matching timestamps
   function(line)
+    -- Reject lines that cannot contain the file:line form required by this matcher.
     if not line:find(":%d+") then
       return nil
     end
-    if line:find("://", 1, true) then
+
+    -- Preserve the original URL exclusion behavior.
+    if line:match("https?://") or line:match("ftp://") then
       return nil
     end
 

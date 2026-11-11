@@ -15,16 +15,18 @@ local M = {}
 ---@param session table
 ---@param config table
 ---@param root string
-function M.ensure_frames_resolved(session, config, root)
+function M.ensure_frames_resolved(session, config, root, force)
   if not session or not session.raw_frames then
     return
   end
 
-  local needs_resolution = false
-  for _, f in ipairs(session.raw_frames) do
-    if not f.resolved_path then
-      needs_resolution = true
-      break
+  local needs_resolution = force == true
+  if not needs_resolution then
+    for _, f in ipairs(session.raw_frames) do
+      if not f.resolved_path then
+        needs_resolution = true
+        break
+      end
     end
   end
 
@@ -43,7 +45,7 @@ function M.ensure_frames_resolved(session, config, root)
   }
 
   for _, f in ipairs(session.raw_frames) do
-    if not f.resolved_path then
+    if force or not f.resolved_path then
       local orig_path = f.path or f.file
       local display, resolved, navigable, metadata = parser.resolve_and_normalize_path(orig_path, norm_opts)
       f.file = display
@@ -66,13 +68,13 @@ end
 ---@param session table
 ---@param config table
 ---@param root? string
-function M.rebuild_derived(session, config, root)
+function M.rebuild_derived(session, config, root, force)
   if not session or not session.raw_frames then
     return
   end
 
   root = root or session.root or vim.fs.normalize(vim.fn.getcwd())
-  M.ensure_frames_resolved(session, config, root)
+  M.ensure_frames_resolved(session, config, root, force)
 
   local collected = collector.collect(session.raw_frames, {
     root = root,
@@ -573,7 +575,7 @@ function M.refresh_availability(session, config)
     end
   end
 
-  M.rebuild_derived(session, config)
+  M.rebuild_derived(session, config, root, true)
   M.refresh_active_presentation(session)
   vim.notify("Unwind: Refreshed file availability.", vim.log.levels.INFO)
 end

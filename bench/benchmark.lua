@@ -285,7 +285,7 @@ do
   unwind.clear()
 end
 
--- 12. Markdown export: 200 frames across multiple methods
+-- 12. Markdown export: repeated text fixture (lightweight Markdown assembly)
 do
   local export = require("unwind.export")
   local export_frames = {}
@@ -306,12 +306,48 @@ do
     frames = export_frames,
   })
 
-  table.insert(results, benchmark("Markdown export build (200 frames)", 10, function()
+  table.insert(results, benchmark("Markdown export build — repeated text fixture", 10, function()
     export.build(session)
   end))
 end
 
--- 13. End-to-end frame action latency (move + active presentation sync)
+-- 13. Markdown export: multiple methods in real Lua/Ruby source
+do
+  local export = require("unwind.export")
+  local ruby_fixture_path = cwd .. "/bench_methods.lua"
+  local r_file = io.open(ruby_fixture_path, "w")
+  for m = 1, 20 do
+    r_file:write(string.format("local function method_%d()\n  local x = %d\n  return x * 2\nend\n\n", m, m))
+  end
+  r_file:close()
+
+  local multi_frames = {}
+  for i = 1, 200 do
+    local method_num = (i % 20) + 1
+    local line_num = (method_num - 1) * 5 + 2
+    table.insert(multi_frames, {
+      file = "bench_methods.lua",
+      resolved_path = ruby_fixture_path,
+      line = line_num,
+      col = 3,
+      method = "method_" .. method_num,
+      raw_line = "bench_methods.lua:" .. line_num,
+    })
+  end
+
+  local session_multi = sessions.create({
+    root = cwd,
+    name = "Multi Method Export Bench",
+    transient = true,
+    frames = multi_frames,
+  })
+
+  table.insert(results, benchmark("Markdown export build — multi-method source", 10, function()
+    export.build(session_multi)
+  end))
+end
+
+-- 14. Session frame reorder action (200 frames)
 do
   local actions = require("unwind.session_actions")
   local action_frames = {}
@@ -332,7 +368,7 @@ do
   })
   actions.rebuild_derived(session, { ignore_patterns = {} })
 
-  table.insert(results, benchmark("E2E frame reorder action (200 frames)", 20, function()
+  table.insert(results, benchmark("Session frame reorder action (200 frames)", 20, function()
     actions.move_frame_in_session(session, 1, 2, nil, { ignore_patterns = {} })
     actions.move_frame_in_session(session, 2, 1, nil, { ignore_patterns = {} })
   end))
