@@ -81,7 +81,7 @@ end
 --- Close / Hide sidebar window
 function M.hide()
   if sidebar_win and vim.api.nvim_win_is_valid(sidebar_win) then
-    vim.api.nvim_win_close(sidebar_win, true)
+    pcall(vim.api.nvim_win_close, sidebar_win, true)
   end
   sidebar_win = nil
 end
@@ -314,29 +314,40 @@ function M.open(session, opts)
   -- Set buffer local keymaps
   local key_opts = { noremap = true, silent = true, buffer = buf }
 
+  local function get_active_session()
+    local ok_state, state_mod = pcall(require, "unwind.state")
+    if ok_state and state_mod and state_mod.current then
+      return state_mod.current() or session
+    end
+    return session
+  end
+
   vim.keymap.set("n", "<CR>", function()
+    local cur_sess = get_active_session()
     local cursor = vim.api.nvim_win_get_cursor(0)
     local line_idx = cursor[1] -- 1-indexed line in buffer
     local frame_idx = line_idx - 2 -- frame 1 is line 3 (index 2 in 0-based)
-    if opts.on_select_frame and frame_idx >= 1 and frame_idx <= #(session.frames or {}) then
+    if opts.on_select_frame and frame_idx >= 1 and frame_idx <= #(cur_sess.frames or {}) then
       opts.on_select_frame(frame_idx)
     end
   end, key_opts)
 
   vim.keymap.set("n", "d", function()
+    local cur_sess = get_active_session()
     local cursor = vim.api.nvim_win_get_cursor(0)
     local line_idx = cursor[1]
     local frame_idx = line_idx - 2
-    if opts.on_delete_frame and frame_idx >= 1 and frame_idx <= #(session.frames or {}) then
+    if opts.on_delete_frame and frame_idx >= 1 and frame_idx <= #(cur_sess.frames or {}) then
       opts.on_delete_frame(frame_idx)
     end
   end, key_opts)
 
   -- J: Move selected frame down
   vim.keymap.set("n", "J", function()
+    local cur_sess = get_active_session()
     local cursor = vim.api.nvim_win_get_cursor(0)
     local frame_idx = cursor[1] - 2
-    local total = #(session.frames or {})
+    local total = #(cur_sess.frames or {})
     if opts.on_move_frame and frame_idx >= 1 and frame_idx < total then
       opts.on_move_frame(frame_idx, frame_idx + 1)
     end
@@ -344,9 +355,10 @@ function M.open(session, opts)
 
   -- K: Move selected frame up
   vim.keymap.set("n", "K", function()
+    local cur_sess = get_active_session()
     local cursor = vim.api.nvim_win_get_cursor(0)
     local frame_idx = cursor[1] - 2
-    local total = #(session.frames or {})
+    local total = #(cur_sess.frames or {})
     if opts.on_move_frame and frame_idx > 1 and frame_idx <= total then
       opts.on_move_frame(frame_idx, frame_idx - 1)
     end
@@ -354,9 +366,10 @@ function M.open(session, opts)
 
   -- e: Replace selected frame with current source location
   vim.keymap.set("n", "e", function()
+    local cur_sess = get_active_session()
     local cursor = vim.api.nvim_win_get_cursor(0)
     local frame_idx = cursor[1] - 2
-    if opts.on_replace_frame and frame_idx >= 1 and frame_idx <= #(session.frames or {}) then
+    if opts.on_replace_frame and frame_idx >= 1 and frame_idx <= #(cur_sess.frames or {}) then
       opts.on_replace_frame(frame_idx)
     end
   end, key_opts)

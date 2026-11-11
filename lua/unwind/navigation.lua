@@ -124,10 +124,6 @@ function M.jump_to_frame(session, idx)
 
   if target_path ~= current_path then
     local existing_buf = vim.fn.bufnr(target_path)
-    if existing_buf == -1 and frame.file then
-      existing_buf = vim.fn.bufnr(frame.file)
-    end
-
     local already_loaded = existing_buf ~= -1
       and vim.api.nvim_buf_is_valid(existing_buf)
       and vim.api.nvim_buf_is_loaded(existing_buf)
@@ -136,10 +132,6 @@ function M.jump_to_frame(session, idx)
       vim.api.nvim_set_current_buf(existing_buf)
     else
       local ok, err = pcall(vim.cmd.edit, vim.fn.fnameescape(target_path))
-      if not ok then
-        ok, err = pcall(vim.cmd.edit, vim.fn.fnameescape(frame.file))
-      end
-
       if not ok then
         vim.notify("Unwind: Could not open file " .. tostring(frame.file) .. ": " .. tostring(err), vim.log.levels.ERROR)
         session.active_index = idx
@@ -276,14 +268,32 @@ function M.quickfix(session)
     return
   end
 
+  local root = session.root or vim.fs.normalize(vim.fn.getcwd())
   local qf_items = {}
+
   for _, frame in ipairs(session.frames) do
-    table.insert(qf_items, {
-      filename = frame.file,
-      lnum = frame.line,
+    local file_entry = (frame.file_index and session.files) and session.files[frame.file_index] or nil
+    local navigable_path = (file_entry and file_entry.canonical_resolved)
+      or frame.resolved_path
+      or frame.file
+
+    local is_missing = (file_entry and file_entry.available == false) or (frame.navigable == false)
+
+    local method_text = (frame.method and frame.method ~= "") and ("at " .. frame.method) or nil
+    local raw_text = (frame.raw_line and frame.raw_line ~= "") and frame.raw_line or nil
+    local item_text = method_text or raw_text or (frame.file or "")
+    if is_missing then
+      item_text = "[N/A] " .. item_text
+    end
+
+    local qf_item = {
+      filename = navigable_path,
+      lnum = frame.line or 1,
       col = frame.col or 1,
-      text = frame.method ~= "" and ("at " .. frame.method) or frame.raw_line,
-    })
+      text = item_text,
+      valid = is_missing and 0 or 1,
+    }
+    table.insert(qf_items, qf_item)
   end
 
   vim.fn.setqflist({}, "r", { items = qf_items, title = session.name or "Unwind Stacktrace" })

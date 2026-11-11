@@ -50,23 +50,8 @@ function M.from_text(text, config, state, activate_fn)
     transient = true,
     name = nil,
   })
-  state.set_current(session)
 
-  session_actions.rebuild_derived(session, config)
-  decorator.clear()
-
-  if #session.frames == 0 then
-    vim.notify("Unwind: All recognized frames were filtered out as vendor/external files.", vim.log.levels.WARN)
-    return session
-  end
-
-  vim.notify(string.format("Unwind: Loaded %d frames across %d files.", #session.frames, #session.files), vim.log.levels.INFO)
-
-  if sidebar.is_open() then
-    sidebar.render(session)
-  end
-
-  navigation.jump_to_frame(session, 1)
+  activate_fn(session)
   return session
 end
 

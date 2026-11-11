@@ -42,7 +42,7 @@ end
 --- Get current active project root
 ---@return string
 function M.get_root()
-  return M.raw.root or (M.raw.active_session and M.raw.active_session.root) or vim.fs.normalize(vim.fn.getcwd())
+  return (M.raw.active_session and M.raw.active_session.root) or M.raw.root or vim.fs.normalize(vim.fn.getcwd())
 end
 
 --- Set current active project root
@@ -50,9 +50,6 @@ end
 function M.set_root(root)
   local norm = vim.fs.normalize(root)
   M.raw.root = norm
-  if M.raw.active_session then
-    M.raw.active_session.root = norm
-  end
 end
 
 --- Ensure persisted sessions are loaded for project root

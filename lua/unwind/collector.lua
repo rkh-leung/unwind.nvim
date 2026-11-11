@@ -94,10 +94,18 @@ function M.collect(frames, opts)
   if filter_vendor then
     active_frames = {}
     for _, frame in ipairs(frames) do
-      local fpath = frame.resolved_path or frame.file
+      local target_loc = frame.resolved_path or frame.file
+      local is_loc_vendor = is_vendor(target_loc)
       local should_ignore = false
 
-      if frame.external == true or is_vendor(fpath) or is_vendor(frame.file) or is_vendor(frame.path) then
+      if frame.external == true then
+        should_ignore = true
+      elseif is_loc_vendor then
+        should_ignore = true
+      elseif frame.external == false or (not is_loc_vendor and frame.resolved_path) then
+        -- Destination resolved cleanly to workspace source; do not filter based on raw remote trace path
+        should_ignore = false
+      elseif is_vendor(frame.file) or is_vendor(frame.path) then
         should_ignore = true
       end
 
@@ -117,6 +125,17 @@ function M.collect(frames, opts)
     local existing_idx = file_map[canonical_key]
 
     if not existing_idx then
+      local target_loc = frame.resolved_path or frame.file
+      local is_loc_vendor = is_vendor(target_loc)
+      local is_frame_vendor = false
+      if frame.external == true or is_loc_vendor then
+        is_frame_vendor = true
+      elseif frame.external == false or (not is_loc_vendor and frame.resolved_path) then
+        is_frame_vendor = false
+      elseif is_vendor(frame.file) or is_vendor(frame.path) then
+        is_frame_vendor = true
+      end
+
       local entry = {
         file = frame.file,
         resolved_path = frame.resolved_path or frame.file,
@@ -127,7 +146,7 @@ function M.collect(frames, opts)
         primary_frame_index = frame_idx,
         total_frames = 1,
         frames = { frame },
-        is_vendor = (frame.external == true) or is_vendor(frame.resolved_path or frame.file) or is_vendor(frame.file) or is_vendor(frame.path),
+        is_vendor = is_frame_vendor,
         external = frame.external,
         source_kind = frame.source_kind,
         resolution = frame.resolution,
