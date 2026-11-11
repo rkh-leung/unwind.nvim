@@ -149,20 +149,20 @@ function M.resolve_and_normalize_path(raw_path, opts)
     end
   end
 
-  -- If it's already an absolute path inside root, make display relative
+  -- Fast-path: If it's already an absolute path inside root, make display relative
   local check_norm = is_windows and normalized:lower() or normalized
   local check_root = is_windows and root:lower() or root
   local is_in_root = check_norm:sub(1, #check_root) == check_root
 
   if is_in_root then
     local rel = normalized:sub(#root + 1)
-    if file_exists(rel) or file_exists(root .. rel) or file_exists(normalized) then
+    if file_exists(normalized) or file_exists(root .. rel) or file_exists(rel) then
       local abs = file_exists(normalized) and normalized or canonicalize_lexical(root .. rel)
       return store_cache(rel, abs, true, nil)
     end
   end
 
-  -- If directly readable as-is, return it
+  -- If directly readable as-is, return it immediately
   if file_exists(raw_path) or file_exists(normalized) then
     local abs = normalized
     if normalized:sub(1, 1) ~= "/" and not normalized:match("^%a:[/\\]") then
@@ -431,25 +431,50 @@ local matchers = {
 
     local file, lnum, col
 
-    -- 1. Try Windows path (e.g. C:\path\file.ext:line[:col]) without spaces
-    file, lnum, col = line:match("([%a]:[/\\][%w_%-./\\]+%.%a%w*):(%d+):?(%d*)")
+    -- 1. Quoted paths with spaces or special characters
+    file, lnum, col = line:match('["\']([^:\r\n"\']+%.%a%w*):(%d+):?(%d*)["\']?')
 
-    -- 2. Standard clean path token without prefix words (e.g. "[ERROR] src/main.rs:45:12" -> "src/main.rs")
-    if not file then
-      file, lnum, col = line:match("([%w_%-./\\]+%.%a%w*):(%d+):?(%d*)")
-    end
-
-    -- 3. Fallback for paths with spaces, @, +, (), anchored after whitespace/brackets/quotes
+    -- 2. Windows absolute paths (with or without spaces), anchored after delimiter or at line start
     if not file then
       file, lnum, col = line:match("[%s%[\"'%(]([%a]:[/\\][^:\r\n\"'%[%]%(%)]+%.%a%w*):(%d+):?(%d*)")
     end
     if not file then
-      file, lnum, col = line:match("[%s%[\"'%(]([^:\r\n\"'%[%]%(%)]+%.%a%w*):(%d+):?(%d*)")
+      file, lnum, col = line:match("^%s*([%a]:[/\\][^:\r\n\"'%[%]%(%)]+%.%a%w*):(%d+):?(%d*)")
     end
 
-    -- 4. Start of line with path that might contain spaces/special characters
+    -- 3. Unix absolute paths (e.g. "[ERROR] /Users/Jane Doe/project/main.go:50:10"), anchored after delimiter or at start
     if not file then
-      file, lnum, col = line:match("^%s*([%a]:[/\\][^:\r\n\"'%[%]%(%)]+%.%a%w*):(%d+):?(%d*)")
+      file, lnum, col = line:match("[%s%[\"'%(](/[^:\r\n\"'%[%]%(%)]+%.%a%w*):(%d+):?(%d*)")
+    end
+    if not file then
+      file, lnum, col = line:match("^%s*(/[^:\r\n\"'%[%]%(%)]+%.%a%w*):(%d+):?(%d*)")
+    end
+
+    -- 4. Explicit relative paths starting with ./ or ../
+    if not file then
+      file, lnum, col = line:match("[%s%[\"'%(](%.%./[^:\r\n\"'%[%]%(%)]+%.%a%w*):(%d+):?(%d*)")
+    end
+    if not file then
+      file, lnum, col = line:match("[%s%[\"'%(](%./[^:\r\n\"'%[%]%(%)]+%.%a%w*):(%d+):?(%d*)")
+    end
+    if not file then
+      file, lnum, col = line:match("^%s*(%.%./[^:\r\n\"'%[%]%(%)]+%.%a%w*):(%d+):?(%d*)")
+    end
+    if not file then
+      file, lnum, col = line:match("^%s*(%./[^:\r\n\"'%[%]%(%)]+%.%a%w*):(%d+):?(%d*)")
+    end
+
+    -- 5. Standard clean path token without spaces (e.g. "[ERROR] src/main.rs:45:12" -> "src/main.rs", "failed in test/runner.py:10" -> "test/runner.py")
+    if not file then
+      file, lnum, col = line:match("([%a]:[/\\][%w_%-./\\]+%.%a%w*):(%d+):?(%d*)")
+    end
+    if not file then
+      file, lnum, col = line:match("([%w_%-./\\]+%.%a%w*):(%d+):?(%d*)")
+    end
+
+    -- 6. General fallback for paths with spaces/special characters
+    if not file then
+      file, lnum, col = line:match("[%s%[\"'%(]([^:\r\n\"'%[%]%(%)]+%.%a%w*):(%d+):?(%d*)")
     end
     if not file then
       file, lnum, col = line:match("^%s*([^:\r\n\"'%[%]%(%)]+%.%a%w*):(%d+):?(%d*)")
@@ -625,21 +650,8 @@ function M.parse(text, opts)
         end
 
         if matched_frame then
-          local original_path = matched_frame.file
-          local display, resolved, navigable, metadata =
-            M.resolve_and_normalize_path(original_path, norm_opts)
-
           matched_frame.raw_line = line
-          matched_frame.path = original_path
-          matched_frame.file = display
-          matched_frame.resolved_path = resolved
-          matched_frame.navigable = navigable
-
-          if metadata then
-            matched_frame.external = metadata.external
-            matched_frame.source_kind = metadata.source_kind
-            matched_frame.resolution = metadata.resolution
-          end
+          matched_frame.path = matched_frame.file
           matched_frame.method = matched_frame.method or ""
 
           if is_python_frame then
@@ -656,6 +668,27 @@ function M.parse(text, opts)
   end
 
   flush_python_block()
+
+  -- Deferred path resolution: resolve only the frames retained in memory
+  for _, frame in ipairs(frames) do
+    local original_path = frame.path or frame.file
+    local display, resolved, navigable, metadata =
+      M.resolve_and_normalize_path(original_path, norm_opts)
+
+    frame.file = display
+    frame.resolved_path = resolved
+    frame.navigable = navigable
+
+    if metadata then
+      frame.external = metadata.external
+      frame.source_kind = metadata.source_kind
+      frame.resolution = metadata.resolution
+    else
+      frame.external = nil
+      frame.source_kind = nil
+      frame.resolution = nil
+    end
+  end
 
   return frames
 end

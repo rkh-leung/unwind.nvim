@@ -11,6 +11,55 @@ local navigation = require("unwind.navigation")
 
 local M = {}
 
+--- Ensure all frames in session have their paths normalized and resolved against root
+---@param session table
+---@param config table
+---@param root string
+function M.ensure_frames_resolved(session, config, root)
+  if not session or not session.raw_frames then
+    return
+  end
+
+  local needs_resolution = false
+  for _, f in ipairs(session.raw_frames) do
+    if not f.resolved_path then
+      needs_resolution = true
+      break
+    end
+  end
+
+  if not needs_resolution then
+    return
+  end
+
+  local stat_cache = {}
+  local path_cache = {}
+  local compiled_mappings = config.path_mappings and parser.compile_path_mappings(config.path_mappings) or nil
+  local norm_opts = {
+    root = root,
+    compiled_mappings = compiled_mappings,
+    cache = path_cache,
+    stat_cache = stat_cache,
+  }
+
+  for _, f in ipairs(session.raw_frames) do
+    local orig_path = f.path or f.file
+    local display, resolved, navigable, metadata = parser.resolve_and_normalize_path(orig_path, norm_opts)
+    f.file = display
+    f.resolved_path = resolved
+    f.navigable = navigable
+    if metadata then
+      f.external = metadata.external
+      f.source_kind = metadata.source_kind
+      f.resolution = metadata.resolution
+    else
+      f.external = nil
+      f.source_kind = nil
+      f.resolution = nil
+    end
+  end
+end
+
 --- Rebuild runtime derived frames, files, and availability for a session
 ---@param session table
 ---@param config table
@@ -21,6 +70,8 @@ function M.rebuild_derived(session, config, root)
   end
 
   root = root or session.root or vim.fs.normalize(vim.fn.getcwd())
+  M.ensure_frames_resolved(session, config, root)
+
   local collected = collector.collect(session.raw_frames, {
     root = root,
     filter_vendor = session.filter_enabled,
@@ -100,9 +151,16 @@ function M.toggle_filter(session, saved_sessions, config)
     return
   end
 
+  local old_filter = session.filter_enabled
   session.filter_enabled = not session.filter_enabled
+
   if session.saved then
-    sessions.save(session.root, saved_sessions)
+    local ok = sessions.save(session.root, saved_sessions)
+    if not ok then
+      session.filter_enabled = old_filter
+      vim.notify("Unwind: Failed to persist filter toggle to disk.", vim.log.levels.ERROR)
+      return
+    end
   end
 
   M.reapply_filter(session, config)
@@ -298,6 +356,10 @@ function M.refresh_availability(session, config)
       f.external = metadata.external
       f.source_kind = metadata.source_kind
       f.resolution = metadata.resolution
+    else
+      f.external = nil
+      f.source_kind = nil
+      f.resolution = nil
     end
   end
 

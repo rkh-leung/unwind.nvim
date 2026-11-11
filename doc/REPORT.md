@@ -130,8 +130,10 @@ raw_state = {
 Key invariants & responsibilities:
 - **Disk as Sole Authority**: `check_file_availability()` checks filesystem presence directly (`fs_stat`). In-memory loaded buffers never mask deleted files, ensuring deleted files correctly display as red `N/A`.
 - **Fast Navigation Path**: During `jump_to_frame()`, cached `file_entry.canonical_resolved` is validated with a single `fs_stat` call instead of repeating multi-step path resolution heuristics.
+- **Re-Resolution on Saved Session Activation**: Persisted sessions deliberately do not store runtime `resolved_path` or availability. When a saved session is activated, `ensure_frames_resolved` re-runs normalization on the original frame paths against the current project root and path mappings, guaranteeing reliable navigation across Neovim restarts.
 - **Synchronized Deletion**: When deleting a frame via `delete_frame_from_session()`, if the deleted frame was active, the nearest surviving frame is selected via `jump_to_frame()`, keeping the source buffer, cursor, extmark decorator, and sidebar strictly in sync. Non-active frame deletions preserve the active frame's identity.
 - **Window Isolation**: `ui.ensure_source_window()` and `sidebar.ensure_source_window()` guarantee navigation operates strictly in a normal source window, never in a floating window or the sidebar split.
+- **Sidebar Callback Isolation**: Sidebar buffer-local keymaps query the active session dynamically rather than closing over a captured session instance, preventing mutations from targeting stale sessions.
 
 ### 2.3 Persistent Sessions Store (`lua/unwind/sessions.lua`)
 - **Storage Scope**: Sessions are persisted per project root in `stdpath("state")/unwind/<sha256(root)>.json`.
@@ -148,6 +150,9 @@ Key invariants & responsibilities:
 
 ### 2.5 Pure Lua Parsing & Normalization (`lua/unwind/parser.lua`)
 Processes text line-by-line across Raygun/.NET, Java, Rust, Node.js/V8, Python, Ruby, and generic formats. Python tracebacks invert frames per traceback block so innermost crash frames appear first. Container path prefixes (`/app/`, `/var/task/`, `C:\workspace\`) are normalized to local workspace paths.
+- **Deferred Path Resolution**: Syntactic parsing collects raw candidates first, bounded by `max_frames` and ring buffer pruning, before resolving paths against the filesystem only for the retained frames.
+- **Generic Matcher Space Handling**: Prioritizes delimiter-anchored candidates so log lines such as `[ERROR] /Users/Jane Doe/project/main.go:50:10` capture the complete path without premature whitespace truncation.
+- **Safe Quickfix Export**: Exports resolved canonical paths with `valid = 0` and `[N/A]` labeling for missing frames.
 
 ### 2.6 Extmarks & Floating Menu (`lua/unwind/decorator.lua` & `lua/unwind/ui.lua`)
 - Injects non-invasive `virt_lines` telemetry above fault lines using `unwind_diagnostics` namespace.

@@ -153,16 +153,20 @@ local function get_sidebar_callbacks(session)
       M.jump_to_frame(f_idx)
     end,
     on_delete_frame = function(f_idx)
-      M.delete_frame_from_session(session, f_idx)
+      local cur_sess = state.current() or session
+      M.delete_frame_from_session(cur_sess, f_idx)
     end,
     on_move_frame = function(from_idx, to_idx)
-      M.move_frame_in_session(session, from_idx, to_idx)
+      local cur_sess = state.current() or session
+      M.move_frame_in_session(cur_sess, from_idx, to_idx)
     end,
     on_replace_frame = function(f_idx)
-      M.replace_frame_in_session(session, f_idx)
+      local cur_sess = state.current() or session
+      M.replace_frame_in_session(cur_sess, f_idx)
     end,
     on_save = function()
-      M.prompt_save_session(session)
+      local cur_sess = state.current() or session
+      M.prompt_save_session(cur_sess)
     end,
     on_refresh = function()
       M.refresh_availability()
@@ -242,8 +246,26 @@ end
 ---@param text string
 ---@return table|nil session
 function M.ingest(text)
+  local was_sidebar_open = sidebar.is_open()
   return ingest.from_text(text, M.config, state, function(sess)
-    M.activate_session(sess)
+    state.set_current(sess)
+    M.rebuild_derived(sess)
+    if was_sidebar_open then
+      sidebar.open(sess, get_sidebar_callbacks(sess))
+    end
+    events.emit("session_activated", sess)
+
+    if sess.frames and #sess.frames > 0 then
+      local target = (sess.active_index and sess.active_index > 0) and sess.active_index or 1
+      M.jump_to_frame(target)
+    else
+      sess.active_index = 0
+      sess.active_file_index = 0
+      decorator.clear()
+      if was_sidebar_open then
+        sidebar.render(sess)
+      end
+    end
   end)
 end
 
