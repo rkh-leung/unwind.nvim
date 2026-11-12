@@ -206,6 +206,8 @@ function M.from_cursor(opts)
   local col = opts.col or (vim.api.nvim_win_get_cursor(0)[2] + 1)
   local root = opts.root or vim.fs.normalize(vim.fn.getcwd())
   local resolve_fn = (opts.resolve_function ~= false)
+  -- New option: resolution mode (smart, scope, function, exact)
+  local mode = opts.mode or "smart"
 
   local bufname = vim.api.nvim_buf_get_name(bufnr)
   local rel_path = bufname
@@ -213,7 +215,7 @@ function M.from_cursor(opts)
     rel_path = bufname:sub(#root + 2)
   end
 
-  -- Default fallback
+  -- Default fallback frame
   local frame = {
     path = bufname,
     file = rel_path,
@@ -223,7 +225,14 @@ function M.from_cursor(opts)
     method = nil,
     origin = "manual",
     raw_line = string.format("%s:%d:%d", rel_path, row, col),
+    anchor_kind = "exact",
+    label = nil,
   }
+
+  if mode == "exact" then
+    -- Return exact cursor location without further resolution
+    return frame
+  end
 
   if not resolve_fn or not vim.treesitter or not vim.treesitter.get_parser then
     return frame
@@ -234,10 +243,9 @@ function M.from_cursor(opts)
     return frame
   end
 
-  -- Explicitly parse buffer to avoid stale tree
+  -- Ensure fresh tree
   pcall(function() parser:parse() end)
 
-  -- Tree-sitter uses 0-indexed row and col
   local ts_row = math.max(0, row - 1)
   local ts_col = math.max(0, col - 1)
 
@@ -258,19 +266,68 @@ function M.from_cursor(opts)
 
   local lang = parser:lang()
 
-  -- Ascend AST tree to find enclosing function
+  -- Helper to set frame from a given node
+  local function set_frame_from_node(target_node, kind, label)
+    local start_row, start_col = target_node:range()
+    frame.line = start_row + 1
+    frame.col = start_col + 1
+    frame.column = start_col + 1
+    frame.anchor_kind = kind
+    frame.label = label
+    if kind ~= "exact" then
+      local method_name = M.get_function_name(lang, target_node, bufnr)
+      frame.method = method_name
+    end
+    frame.raw_line = string.format("%s:%d:%d%s", rel_path, frame.line, frame.col,
+      label and (" at " .. label) or "")
+  end
+
+  -- Ruby specific scope detection
+  if lang == "ruby" then
+    -- If node is a call with a block, use it as scope
+    local function is_call_with_block(n)
+      if not n then return false end
+      if n:type() ~= "call" then return false end
+      -- Look for do_block or block child
+      for child in n:iter_children() do
+        local t = child:type()
+        if t == "do_block" or t == "block" then
+          return true, child
+        end
+      end
+      return false, nil
+    end
+    local is_call, block_node = is_call_with_block(node)
+    if is_call then
+      -- Use the call node as anchor if mode permits
+      if mode == "smart" or mode == "scope" then
+        local call_text = vim.treesitter.get_node_text(node, bufnr)
+        set_frame_from_node(node, "scope", call_text)
+        return frame
+      end
+    end
+    -- If cursor is inside a block, climb to the call node
+    if mode ~= "exact" then
+      local cur = node
+      while cur do
+        local parent = cur:parent()
+        if not parent then break end
+        local is_parent_call, _ = is_call_with_block(parent)
+        if is_parent_call then
+          local call_text = vim.treesitter.get_node_text(parent, bufnr)
+          set_frame_from_node(parent, "scope", call_text)
+          return frame
+        end
+        cur = parent
+      end
+    end
+  end
+
+  -- Existing function resolution (fallback)
   local current = node
   while current do
     if M.is_function_node(lang, current) then
-      local start_row, start_col = current:range()
-      local method_name = M.get_function_name(lang, current, bufnr)
-
-      frame.line = start_row + 1
-      frame.col = start_col + 1
-      frame.column = start_col + 1
-      frame.method = method_name
-      frame.origin = "manual"
-      frame.raw_line = string.format("%s:%d:%d%s", rel_path, frame.line, frame.col, method_name and (" at " .. method_name) or "")
+      set_frame_from_node(current, "function", nil)
       return frame
     end
     current = current:parent()
@@ -278,5 +335,6 @@ function M.from_cursor(opts)
 
   return frame
 end
+  
 
 return M
