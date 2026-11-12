@@ -1,5 +1,7 @@
--- lua/unwind/resolvers/ruby/managers/asdf.lua
--- asdf Ruby manager adapter
+---@module "unwind.resolvers.ruby.managers.asdf"
+--- asdf Ruby manager adapter
+
+local common = require("unwind.resolvers.common")
 
 local M = {}
 
@@ -7,12 +9,12 @@ local M = {}
 ---@param root string
 ---@return boolean
 function M.detect(root)
-  local asdf_data = os.getenv("ASDF_DATA_DIR")
-  local home = os.getenv("HOME")
-  if asdf_data and (vim.uv or vim.loop).fs_stat(asdf_data .. "/installs/ruby") then
+  local asdf_data = common.getenv("ASDF_DATA_DIR")
+  local home = common.getenv("HOME")
+  if asdf_data and common.exists(asdf_data .. "/installs/ruby") then
     return true
   end
-  if home and (vim.uv or vim.loop).fs_stat(home .. "/.asdf/installs/ruby") then
+  if home and common.exists(home .. "/.asdf/installs/ruby") then
     return true
   end
   return false
@@ -27,19 +29,18 @@ function M.find_ruby(version)
   end
 
   local candidate_roots = {}
-  local asdf_data = os.getenv("ASDF_DATA_DIR")
-  if asdf_data and asdf_data ~= "" then
+  local asdf_data = common.getenv("ASDF_DATA_DIR")
+  if asdf_data then
     table.insert(candidate_roots, asdf_data .. "/installs/ruby")
   end
-  local home = os.getenv("HOME")
-  if home and home ~= "" then
+  local home = common.getenv("HOME")
+  if home then
     table.insert(candidate_roots, home .. "/.asdf/installs/ruby")
   end
 
   for _, root in ipairs(candidate_roots) do
     local ruby_bin = root .. "/" .. version .. "/bin/ruby"
-    local stat = (vim.uv or vim.loop).fs_stat(ruby_bin)
-    if stat and (stat.type == "file" or stat.type == "link") then
+    if common.is_executable_file(ruby_bin) then
       return ruby_bin
     end
   end

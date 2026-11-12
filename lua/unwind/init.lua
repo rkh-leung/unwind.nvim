@@ -1,5 +1,5 @@
--- lua/unwind/init.lua
--- Main facade: setup, keymaps, commands, and high-level orchestration
+---@module "unwind"
+--- Main facade: setup, keymaps, commands, and high-level orchestration
 
 local parser = require("unwind.parser")
 local collector = require("unwind.collector")
@@ -14,8 +14,23 @@ local session_actions = require("unwind.session_actions")
 local ingest = require("unwind.ingest")
 local export = require("unwind.export")
 local text_util = require("unwind.text")
+local keymaps_mod = require("unwind.keymaps")
+local validator = require("unwind.config.validator")
+local hooks = require("unwind.hooks")
+local async_parser = require("unwind.async.parser")
 
 local M = {}
+
+--- Hooks extensibility API
+M.hooks = hooks
+M.register_resolver = hooks.register_resolver
+M.unregister_resolver = hooks.unregister_resolver
+M.register_ui_component = hooks.register_ui_component
+M.unregister_ui_component = hooks.unregister_ui_component
+M.register_exporter = hooks.register_exporter
+M.unregister_exporter = hooks.unregister_exporter
+M.on_event = hooks.on_event
+M.off_event = hooks.off_event
 
 --- Compatibility metatable delegating to state module
 M.state = state.compat
@@ -46,49 +61,57 @@ M.config = {
   },
 }
 
---- Track keymaps installed by Unwind so subsequent setup() calls clean up old ones
-M._installed_keymaps = {}
+--- Compatibility access to installed keymaps
+M._installed_keymaps = keymaps_mod.installed_keymaps
 
 --- Centralized keymap installer with ownership tracking
 ---@param keymaps table|boolean|nil Keymap table or false to disable
 ---@param force? boolean If true, overrides existing non-Unwind keymaps
 function M.install_keymaps(keymaps, force)
-  for _, lhs in ipairs(M._installed_keymaps) do
-    local map = vim.fn.maparg(lhs, "n", false, true)
-    if map and map.desc and map.desc:match("^Unwind:") then
-      pcall(vim.keymap.del, "n", lhs)
-    end
-  end
-  M._installed_keymaps = {}
-
-  if not keymaps or keymaps == false then
-    return
-  end
-
-  local function register_key(lhs, fn, desc)
-    if lhs and lhs ~= "" then
-      local existing = vim.fn.maparg(lhs, "n", false, true)
-      local is_empty = not existing or existing.lhs == nil or existing.lhs == ""
-      local is_unwind = existing and existing.desc and existing.desc:match("^Unwind:")
-
-      if is_empty or is_unwind or force then
-        vim.keymap.set("n", lhs, fn, { desc = desc, silent = true })
-        table.insert(M._installed_keymaps, lhs)
-      end
-    end
-  end
-
-  register_key(keymaps.menu, function() M.menu() end, "Unwind: Open session manager")
-  register_key(keymaps.clipboard, function() M.ingest_clipboard() end, "Unwind: Ingest stacktrace from clipboard")
-  register_key(keymaps.next, function() M.next() end, "Unwind: Next stack frame")
-  register_key(keymaps.prev, function() M.prev() end, "Unwind: Previous stack frame")
-  register_key(keymaps.next_file, function() M.next_file() end, "Unwind: Next stacktrace file")
-  register_key(keymaps.prev_file, function() M.prev_file() end, "Unwind: Previous stacktrace file")
+  keymaps_mod.install_keymaps(keymaps, force, {
+    menu = function() M.menu() end,
+    clipboard = function() M.ingest_clipboard() end,
+    next = function() M.next() end,
+    prev = function() M.prev() end,
+    next_file = function() M.next_file() end,
+    prev_file = function() M.prev_file() end,
+  })
+  M._installed_keymaps = keymaps_mod.installed_keymaps
 end
 
---- Setup unwind plugin options
+--- Parse raw stacktrace text asynchronously
+---@param text string
+---@param cb fun(frames: table[]?, err: string?)
+---@return userdata? handle Active job handle for cancellation
+function M.parse_async(text, cb)
+  vim.notify("Unwind: Parsing...", vim.log.levels.INFO)
+  return async_parser.parse_async(text, function(frames, err)
+    if err then
+      vim.notify("Unwind: Parsing failed: " .. tostring(err), vim.log.levels.ERROR)
+    else
+      vim.notify("Unwind: Parsing... done", vim.log.levels.INFO)
+    end
+    if cb then
+      cb(frames, err)
+    end
+  end)
+end
+
+--- Cancel active async parsing job
+---@param handle userdata
+function M.cancel_parse_async(handle)
+  async_parser.cancel(handle)
+end
 ---@param opts? table
 function M.setup(opts)
+  if opts then
+    local valid, err = validator.validate(opts)
+    if not valid then
+      vim.notify("Unwind: Configuration error: " .. tostring(err), vim.log.levels.ERROR)
+      return
+    end
+  end
+
   local user_opts = opts and vim.tbl_extend("force", {}, opts) or {}
   if user_opts.ignore_patterns then
     local valid_patterns = {}

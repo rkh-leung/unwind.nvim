@@ -1,6 +1,6 @@
--- lua/unwind/parser.lua
--- Pure Lua In-Memory Text Parsing for plain-text crash stacktraces
--- Zero external binary dependencies. Uses Lua pattern matching.
+---@module "unwind.parser"
+--- Pure Lua In-Memory Text Parsing for plain-text crash stacktraces.
+--- Zero external binary dependencies. Uses high-performance pattern matching.
 
 local M = {}
 

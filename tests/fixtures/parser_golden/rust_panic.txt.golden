@@ -1,0 +1,61 @@
+{ {
+    col = 12,
+    file = "panicked at src/main.rs",
+    line = 45,
+    method = "",
+    navigable = false,
+    origin = "stacktrace",
+    path = "panicked at src/main.rs",
+    raw_line = "thread 'main' panicked at src/main.rs:45:12:",
+    resolved_path = "/__unwind_golden_root__/panicked at src/main.rs"
+  }, {
+    col = 5,
+    file = "/rustc/07dca489ac2d933c78d3c5158e3f43beef347bd7/library/std/src/panicking.rs",
+    line = 645,
+    method = "",
+    navigable = false,
+    origin = "stacktrace",
+    path = "/rustc/07dca489ac2d933c78d3c5158e3f43beef347bd7/library/std/src/panicking.rs",
+    raw_line = "             at /rustc/07dca489ac2d933c78d3c5158e3f43beef347bd7/library/std/src/panicking.rs:645:5",
+    resolved_path = "/rustc/07dca489ac2d933c78d3c5158e3f43beef347bd7/library/std/src/panicking.rs"
+  }, {
+    col = 14,
+    file = "/rustc/07dca489ac2d933c78d3c5158e3f43beef347bd7/library/core/src/panicking.rs",
+    line = 72,
+    method = "",
+    navigable = false,
+    origin = "stacktrace",
+    path = "/rustc/07dca489ac2d933c78d3c5158e3f43beef347bd7/library/core/src/panicking.rs",
+    raw_line = "             at /rustc/07dca489ac2d933c78d3c5158e3f43beef347bd7/library/core/src/panicking.rs:72:14",
+    resolved_path = "/rustc/07dca489ac2d933c78d3c5158e3f43beef347bd7/library/core/src/panicking.rs"
+  }, {
+    col = 9,
+    file = "src/order.rs",
+    line = 88,
+    method = "",
+    navigable = false,
+    origin = "stacktrace",
+    path = "src/order.rs",
+    raw_line = "             at src/order.rs:88:9",
+    resolved_path = "/__unwind_golden_root__/src/order.rs"
+  }, {
+    col = 1,
+    file = "/path/to/main.rs",
+    line = 45,
+    method = "",
+    navigable = false,
+    origin = "stacktrace",
+    path = "/path/to/main.rs",
+    raw_line = "             at /path/to/main.rs:45",
+    resolved_path = "/path/to/main.rs"
+  }, {
+    col = 12,
+    file = "src/main.rs",
+    line = 45,
+    method = "compiler",
+    navigable = false,
+    origin = "stacktrace",
+    path = "src/main.rs",
+    raw_line = "  --> src/main.rs:45:12",
+    resolved_path = "/__unwind_golden_root__/src/main.rs"
+  } }

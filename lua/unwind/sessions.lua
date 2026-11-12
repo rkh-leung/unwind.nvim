@@ -1,5 +1,5 @@
--- lua/unwind/sessions.lua
--- Persistent Session Store, Session Lifecycle Management & Mutation API
+---@module "unwind.sessions"
+--- Persistent session store, session lifecycle management, and mutation API.
 
 local events = require("unwind.events")
 local persistence = require("unwind.persistence")

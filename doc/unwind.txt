@@ -1,0 +1,129 @@
+*unwind.txt*    Persistent Call-Trace & Session Manager for Neovim
+
+==============================================================================
+CONTENTS                                                      *unwind-contents*
+
+    1. Introduction ...................................... |unwind-intro|
+    2. Configuration .................................... |unwind-config|
+    3. Commands ........................................ |unwind-commands|
+    4. Keymaps .......................................... |unwind-keymaps|
+    5. Hooks & Extensibility ............................... |unwind-hooks|
+    6. Async Parsing ....................................... |unwind-async|
+
+==============================================================================
+1. INTRODUCTION                                                  *unwind-intro*
+
+unwind.nvim is a lightweight persistent debugging session and call-trace
+navigation manager for Neovim (>= 0.10).
+
+==============================================================================
+2. CONFIGURATION                                                *unwind-config*
+
+Configure unwind.nvim using `require("unwind").setup(opts)`:
+>lua
+    require("unwind").setup({
+      -- Whether to hide external/vendor library frames by default
+      filter_out_of_project = false,
+
+      -- Table of source directory prefixes to map between paths
+      path_mappings = {},
+
+      -- Maximum input buffer size in bytes for ingestion (default: 2 MiB)
+      max_input_bytes = 2 * 1024 * 1024,
+
+      -- Maximum stack frames to parse and display (default: 1000)
+      max_frames = 1000,
+
+      -- Patterns considered external vendor/library code
+      ignore_patterns = {
+        "shared/bundle/",
+        "vendor/bundle/",
+        "/gems/",
+        "node_modules/",
+        "^/usr/",
+      },
+
+      -- Markdown export configuration
+      export = {
+        fallback_context_lines = 10,
+      },
+
+      -- Keymaps to install (or false to disable default keymaps)
+      keymaps = {
+        menu = "<leader>w",
+        clipboard = "<leader>c",
+        next = "]u",
+        prev = "[u",
+        next_file = "]f",
+        prev_file = "[f",
+      },
+
+      -- Override pre-existing non-Unwind keymaps
+      force_keymaps = false,
+    })
+<
+
+Schema validation via `vim.validate` automatically warns or aborts on invalid
+types.
+
+==============================================================================
+3. COMMANDS                                                   *unwind-commands*
+
+:UnwindClipboard            Ingest stacktrace from clipboard
+:UnwindSelection            Ingest stacktrace from visual selection
+:UnwindFile <file>          Ingest stacktrace from a file path
+:UnwindInput                Open interactive input window
+:UnwindMenu                 Toggle session manager floating window
+:UnwindAdd                  Add current buffer location to active session
+:UnwindSidebar              Toggle persistent call-trace sidebar
+:UnwindAnnotate             Add/edit annotation for active frame
+:UnwindNext / :UnwindPrev   Jump between frames
+:UnwindNextFile / :UnwindPrevFile Jump between files
+:UnwindToggleFilter         Toggle vendor filtering
+:UnwindQuickfix             Export frames to Neovim quickfix list
+:UnwindExport               Export session to Markdown buffer
+:UnwindClear                Clear active session and diagnostics
+:UnwindRubyInfo             Show Ruby environment discovery status
+
+==============================================================================
+4. KEYMAPS                                                     *unwind-keymaps*
+
+Default normal-mode keybindings:
+    `<leader>w`  - Open session manager (|:UnwindMenu|)
+    `<leader>c`  - Ingest from clipboard (|:UnwindClipboard|)
+    `]u`         - Next frame (|:UnwindNext|)
+    `[u`         - Previous frame (|:UnwindPrev|)
+    `]f`         - Next file (|:UnwindNextFile|)
+    `[f`         - Previous file (|:UnwindPrevFile|)
+
+==============================================================================
+5. HOOKS & EXTENSIBILITY                                         *unwind-hooks*
+
+Register custom resolvers, UI components, and lifecycle listeners:
+>lua
+    local unwind = require("unwind")
+
+    -- Custom resolver:
+    unwind.register_resolver("my_resolver", {
+      resolve = function(frame, root) ... end,
+    })
+
+    -- Event listener:
+    unwind.on_event("session_mutated", function(session) ... end)
+<
+
+==============================================================================
+6. ASYNC PARSING                                                 *unwind-async*
+
+Ingest large traces non-blockingly using background jobs:
+>lua
+    local handle = require("unwind").parse_async(raw_text, function(frames)
+      -- handle parsed frames
+    end)
+
+    -- If you invoke unwind.async.parser.cancel() you can abort a pending parse
+    -- (e.g. when the user changes the clipboard quickly):
+    require("unwind.async.parser").cancel(handle)
+<
+
+vim:tw=78:ts=8:ft=help:norl:

@@ -6,7 +6,7 @@ This guide is designed for engineers who are working on `unwind.nvim`. We cover 
 
 ---
 
-## Part 1: Lua & Neovim Primer for Maintainers
+## Part 1: Lua \& Neovim Primer for Maintainers
 
 1. **Tables are everything (`{}`)**:
    Lua tables represent arrays, dictionaries, and objects. **Lua arrays are 1-indexed** (`list[1]` is the first item).
@@ -35,60 +35,70 @@ This guide is designed for engineers who are working on `unwind.nvim`. We cover 
 ├── lua/
 │   └── unwind/
 │       ├── init.lua        # Facade & public API orchestration
-│       ├── state.lua       # Centralized runtime state container and multi-root session caching
-│       ├── ingest.lua      # Ingestion entry points from text, clipboard, files, ranges, and selections
-│       ├── navigation.lua  # Buffer navigation, cursor jumping, frame cycling, quickfix export
-│       ├── session_actions.lua # Session modifications, frame mutations, filter reapplication, refresh
-│       ├── sessions.lua    # Session domain model and transactional mutation API
-│       ├── export.lua      # Markdown export generator respecting active session filtering with accurate size reporting
-│       ├── source_extract.lua # Tree-sitter AST method extraction and fallback excerpt reader
-│       ├── persistence.lua # Atomic state serialization and disk persistence with structural validation
-│       ├── events.lua      # Event bus for session lifecycle notifications
-│       ├── location.lua    # Tree-sitter AST function declaration resolver and cursor fallback
-│       ├── sidebar.lua     # Persistent right vertical split sidebar & interactive call-path editor
-│       ├── parser.lua      # Pure Lua stacktrace pattern matcher and path normalizer
-│       ├── path.lua        # Filesystem path helpers and stat caching
-│       ├── collector.lua   # Aggregator: deduplicates files in trace order & tags vendor paths
+│       ├── state.lua       # Centralized runtime state container & multi-root caching
+│       ├── ingest.lua      # Ingestion entry points (clipboard, text, files, ranges, selections)
+│       ├── navigation.lua  # Buffer jumping, cursor positioning, frame cycling, quickfix export
+│       ├── session_actions.lua # Frame mutations, filter reapplication, refresh
+│       ├── sessions.lua    # Session domain model & transactional mutation API
+│       ├── export.lua      # Markdown export generator respecting active session filtering
+│       ├── source_extract.lua # Tree-sitter AST method extraction & fallback excerpt reader
+│       ├── persistence.lua # Atomic JSON disk persistence layer with structural validation
+│       ├── events.lua      # Monotonic event bus for session lifecycle notifications
+│       ├── location.lua    # Tree-sitter function resolver & cursor extraction
+│       ├── sidebar.lua     # Persistent right vertical split sidebar & interactive editor
+│       ├── parser.lua      # Pure Lua stacktrace pattern matcher & path normalizer
+│       ├── path.lua        # Filesystem path helpers & stat caching
+│       ├── collector/      # Split collector logic (see below)
+│       │   ├── collector.lua     # Facade that re‑exports `data`, `ui`, and `persistence`
+│       │   ├── data.lua          # Pure data logic: deduplication, vendor filtering, raw‑index assignment
+│       │   ├── ui.lua            # UI‑related helpers used by the collector (sidebar updates, etc.)
+│       │   └── persistence.lua   # Stub for future persistence hooks (currently unused)
 │       ├── decorator.lua   # Extmarks: renders virtual line banners (virt_lines) above fault lines
-│       ├── text.lua        # UTF-8 display width truncation helpers
-│       ├── ui.lua          # Floating UI: session manager float, input scratchpad, single-line prompt
-│       └── resolvers/      # Multi-tiered path resolution subsystem
-│           ├── init.lua    # Resolver pipeline coordinator (workspace -> mappings -> language)
-│           ├── workspace.lua # Local workspace and container prefix resolution
-│           └── ruby/       # Ruby language resolver (gems, git gems, stdlib)
+│       ├── text.lua        # UTF‑8 display width truncation helpers
+│       ├── ui.lua          # Floating UI components (session manager float, input scratchpad, prompt)
+│       ├── async/          # Async parsing utilities
+│       │   ├── parser.lua        # Non‑blocking background parser spawning `parser_worker.lua`
+│       │   └── parser_worker.lua # Minimal worker script executed in a headless Neovim process
+│       ├── config/         # Configuration handling
+│       │   └── validator.lua     # Schema validation for user options (type checks, limits, path_mappings)
+│       └── resolvers/      # Multi‑tiered path resolution subsystem
+│           ├── init.lua        # Resolver pipeline coordinator (workspace → mappings → language)
+│           ├── workspace.lua   # Workspace path normalizer & container prefix stripping
+│           ├── common.lua      # Shared helpers for language resolvers (binary discovery, utilities)
+│           └── ruby/           # Ruby language resolver (gems, git gems, stdlib)
 │               ├── init.lua        # Public Ruby resolver interface
 │               ├── environment.lua # Version discovery & runtime probe cache
 │               ├── path.lua        # Path pattern extractor
-│               ├── gems.lua        # Exact gem-version matching
-│               ├── git_gems.lua    # Bundler git gems matching
+│               ├── gems.lua        # Exact gem‑version matching
+│               ├── git_gems.lua    # Bundler git gem resolution
 │               ├── stdlib.lua      # Standard library resolution
-│               └── managers/       # Adapters: rbenv, asdf, mise, chruby, rvm, system
+│               └── managers/       # Adapters for rbenv, asdf, mise, chruby, rvm, system
 ├── scripts/
-│   ├── test.sh             # Isolated headless test suite runner
-│   └── benchmark.sh        # Isolated microbenchmark runner
+│   ├── test.sh               # Isolated headless test suite runner
+│   └── benchmark.sh          # Isolated microbenchmark runner
 └── tests/
-    ├── helpers/            # Shared test environment isolation helpers
-    ├── fixtures/           # Real-world crash traces and test dummy files
-    ├── annotation_spec.lua # Frame annotations and virtual line note rendering
-    ├── clipboard_spec.lua  # Clipboard isolation test suite
-    ├── collector_spec.lua  # Derived frames collection and vendor tagging
-    ├── correctness_spec.lua# Functional correctness and navigation invariants
-    ├── decoration_sync_spec.lua # Visual synchronization across reordering and availability
-    ├── ingestion_spec.lua  # Ingestion consistency and transient session isolation
-    ├── isolation_spec.lua  # State isolation from genuine user storage
-    ├── leak_spec.lua       # Memory stability, garbage collection, and window/buffer leak test
-    ├── location_spec.lua   # Tree-sitter and cursor location extraction test suite
-    ├── parser_spec.lua     # Automated functional, regression, and invariant test suite
-    ├── path_spec.lua       # Path resolution and lexical canonicalization
-    ├── perf_spec.lua       # Performance invariants
-    ├── persistence_validation_spec.lua # Persistence schema validation and corrupt file handling
-    ├── regression_fixes_spec.lua # Checklist and regression verification
-    ├── ruby_resolver_spec.lua    # Ruby environment detection and gem resolution
-    ├── ruby/git_gems_spec.lua    # Bundler git gems resolution
-    ├── ruby/stdlib_spec.lua      # Sparse stdlib directory resolution
-    ├── session_spec.lua    # Session model, mutation API, and disk persistence test suite
-    ├── sidebar_spec.lua    # Sidebar display formatting and truncation
-    └── state_spec.lua      # Runtime state and multi-root caching
+    ├── helpers/               # Shared test environment isolation helpers
+    ├── fixtures/              # Real‑world crash traces and test dummy files
+    ├── annotation_spec.lua
+    ├── clipboard_spec.lua
+    ├── collector_spec.lua
+    ├── correctness_spec.lua
+    ├── decoration_sync_spec.lua
+    ├── ingestion_spec.lua
+    ├── isolation_spec.lua
+    ├── leak_spec.lua
+    ├── location_spec.lua
+    ├── parser_spec.lua
+    ├── path_spec.lua
+    ├── perf_spec.lua
+    ├── persistence_validation_spec.lua
+    ├── regression_fixes_spec.lua
+    ├── ruby_resolver_spec.lua
+    ├── ruby/git_gems_spec.lua
+    ├── ruby/stdlib_spec.lua
+    ├── session_spec.lua
+    ├── sidebar_spec.lua
+    └── state_spec.lua
 ```
 
 ---
@@ -101,8 +111,8 @@ This guide is designed for engineers who are working on `unwind.nvim`. We cover 
 
 Key points:
 - Prevents redundant execution using `vim.g.loaded_unwind`.
-- Registers user commands: `:Unwind`, `:UnwindFile`, `:UnwindInput`, `:UnwindClipboard`, `:UnwindSelection`, `:UnwindMenu`, `:UnwindSidebar`, `:UnwindNext`, `:UnwindPrev`, `:UnwindNextFile`, `:UnwindPrevFile`, `:UnwindToggleFilter`, `:UnwindQuickfix`, `:UnwindExport`, `:UnwindClear`, `:UnwindRubyInfo`, `:UnwindAnnotate`.
-- Calls `unwind.install_keymaps()` to bind default single-key leader shortcuts (`<leader>w`, `<leader>c`) without overriding custom user keymaps unless explicitly forced.
+- Registers a comprehensive set of commands (`:Unwind`, `:UnwindClipboard`, `:UnwindAdd`, etc.).
+- Calls `unwind.install_keymaps()` to bind default single‑key leader shortcuts (`<leader>w`, `<leader>c`) without overriding custom user keymaps unless explicitly forced.
 
 ---
 
@@ -115,24 +125,16 @@ Key points:
 raw_state = {
   root = nil,               -- Pinned project root at ingestion time
   sessions = {},            -- Loaded saved sessions for project root
-  sessions_loaded = false,  -- Lazy-load flag
+  sessions_loaded = false,  -- Lazy‑load flag
   active_session = nil,     -- Active session table
 }
 ```
 Compatibility metatable `M.state` delegates queries like `unwind.state.frames` to `raw_state.active_session.frames`.
 
 #### Core Responsibilities:
-- **`check_file_availability(file_path, root)`**: Evaluates filesystem existence via `vim.uv.fs_stat()`. Disk presence is the sole authority; in-memory loaded buffers are never used to fake availability for deleted files.
-- **`jump_to_frame(idx)`**:
-  - Validates cached path against disk with a single `fs_stat` for high performance during rapid stepping (`]u` / `[u`).
-  - If a file is missing, commits `active_index`, highlights the frame in the sidebar as red `N/A`, clears inline decorations, and never creates an empty buffer.
-  - Ensures source window focus via `ui.ensure_source_window()` and `sidebar.ensure_source_window()`.
-  - Sets cursor and renders inline `virt_lines` telemetry via `decorator.render()`.
-- **`delete_frame_from_session(session, frame_idx)`**:
-  - Removes the frame from `session.raw_frames`.
-  - Persists change to disk if saved; if disk persistence fails, rolls back the raw frame array.
-  - Preserves current active frame if a non-active frame was deleted.
-  - If the active frame was deleted, routes through `jump_to_frame()` to select the nearest surviving frame and synchronize source buffer cursor, decorator, and sidebar.
+- `check_file_availability` → disk‑authority existence check via `vim.uv.fs_stat`.
+- `jump_to_frame` → fast navigation with a single `fs_stat` validation, sidebar sync, and virt‑line rendering.
+- `delete_frame_from_session` → safe removal with transactional rollback and automatic active‑frame reselection.
 
 ---
 
@@ -140,79 +142,127 @@ Compatibility metatable `M.state` delegates queries like `unwind.state.frames` t
 
 **Purpose:** Disk persistence layer managing saved debugging sessions.
 
-- **Storage Location**: Scoped to project root: `stdpath("state")/unwind/<sha256(root)>.json`.
-- **Stable Debugging Facts Only**: Serializes only `name`, `filter_enabled`, and `raw_frames` (`file`, `line`, `col`, `method`, `raw_line`, and optional single-line `note`). Excludes runtime handles (bufnr, winid, extmarks, active indices).
-- **Atomic File Writes**: Serializes JSON to a temporary file (`.tmp.<hrtime>`), verifies `write()` and `flush()` success, then renames over the target file via `os.rename()`.
-- **Transactional Rollback**: `save_working()`, `rename()`, and `delete()` revert in-memory mutations if `sessions.save()` returns `false`.
+- **Storage Location:** `stdpath("state")/unwind/<sha256(root)>.json`.
+- **Stable Debugging Facts Only:** Serializes `name`, `filter_enabled`, and `raw_frames` (no runtime handles).
+- **Atomic File Writes** and **Transactional Rollback** ensure consistency on disk write failures.
 
 ---
 
 ### 4. `lua/unwind/sidebar.lua`
 
-**Purpose:** Persistent right-hand vertical split call-trace sidebar.
+**Purpose:** Persistent right‑hand vertical split call‑trace sidebar.
 
-- **Reusable Split Window**: Uses one persistent `unwind://sidebar` buffer across all sessions.
-- **Trace Formatting**: Renders indexed call frames with method, filename, and line number. Renders `●` indicator for annotated frames (`UnwindSidebarAnnotated`).
-- **Interactive Annotation Keybinding (`a`)**: Prepopulates current annotation in `ui.prompt_input()` to add, edit, or remove notes.
-- **Active Missing Frame Highlighting**: Uses `UnwindSidebarActive` combined with `UnwindSidebarMissing` for missing active frames.
-- **Reserved Footer**: Always reserves a footer row during initial render so `set_active()` can update `1/N file:line` when loaded sessions activate.
-- **Bounded Navigation**: Keymaps `<CR>` and `d` enforce row bounds (`1 <= frame_idx <= #frames`), preventing jumps on footer/blank rows.
-- **Window Safety**: If the sidebar is the only normal window left in Neovim, `ensure_source_window()` splits a normal window before navigation.
+- Re‑uses a single `unwind://sidebar` buffer.
+- Renders indexed frames, annotation indicator `●`, and missing‑file highlighting.
+- Provides interactive annotation (`a`), deletion (`d`), and safe navigation safeguards.
+- Guarantees a source window exists before any navigation.
 
 ---
 
 ### 5. `lua/unwind/parser.lua`
 
-**Purpose:** Pure Lua pattern matcher parsing stack traces into `{ file, line, col, method, raw_line }`.
+**Purpose:** Pure Lua pattern matcher parsing stack traces into `{file, line, col, method, raw_line}`.
 
-- Supports Raygun/.NET, Java inner classes/lambdas, Rust compiler arrows, Node.js/V8, Python tracebacks, Ruby, and generic formats.
-- Inverts Python traceback blocks so the innermost crash frame appears first.
-- Strips container/virtual path prefixes (`/app/`, `/var/task/`, `C:\workspace\`) and resolves paths relative to project root.
+- Supports many languages/formats (Raygun, Java, Rust, Node.js, Python, Ruby, generic logs).
+- Normalises container prefixes and resolves paths relative to the project root.
+- Performs deferred path resolution after frame collection to minimise filesystem calls.
 
 ---
 
-### 6. `lua/unwind/collector.lua`
+### 6. `lua/unwind/collector/`
 
-**Purpose:** Deduplicates frames into unique file entries while preserving chronological occurrence order. Tags third-party vendor frames (`vendor/bundle/`, `node_modules/`, `/usr/lib/`, relative paths ascending outside workspace).
+The collector has been split into three focused modules:
+
+| File | Purpose |
+|------|---------|
+| `collector.lua` | Facade that re‑exports the three sub‑modules (`data`, `ui`, `persistence`). |
+| `data.lua` | Pure data logic: deduplication, vendor/ignore‑pattern filtering, raw‑index assignment, and construction of the `files` table returned to the session manager. |
+| `ui.lua` | UI‑related helpers used by the collector (e.g., updating the sidebar when frames are filtered or when the collector runs in “filter‑off” mode). |
+| `persistence.lua` | Placeholder for future persistence hooks; currently unused but kept for symmetry and potential extensions. |
 
 ---
 
 ### 7. `lua/unwind/decorator.lua`
 
-**Purpose:** Draws inline virtual lines (`virt_lines`) above fault lines in source buffers using Neovim's extmarks API (`unwind_diagnostics` namespace). Renders contextual headers (`● [DEBUG PATH] Step X/Y: method()` vs `● [STACK FRAME] Frame X/Y: method()`) and displays single-line annotations (`💬 <note>`) using the `UnwindAnnotation` highlight group.
+**Purpose:** Draws inline `virt_lines` above fault lines using Neovim's extmarks API (`unwind_diagnostics` namespace). Renders contextual headers (`● [DEBUG PATH]` vs `● [STACK FRAME]`) and single‑line annotations (`💬 <note>`).
 
 ---
 
 ### 8. `lua/unwind/ui.lua`
 
 **Purpose:** Floating UI components:
-- `open_session_manager(items, callbacks)`: Interactive session manager floating menu with open, save, rename (`r`), and delete (`d`) actions.
-- `open_input(on_submit)`: Scratchpad for pasting stacktraces with `<C-s>` and `:w` support.
-- `prompt_input(title, default_val, on_submit)`: Single-line modal for naming and renaming sessions.
+- `open_session_manager` – Interactive session manager floating menu.
+- `open_input` – Scratchpad for pasting stack traces.
+- `prompt_input` – Single‑line modal for naming/renaming sessions.
 
 ---
 
-### 9. `lua/unwind/resolvers/`
+### 9. `lua/unwind/config/validator.lua`
 
-**Purpose:** Multi-tiered path resolution pipeline converting remote/container paths to local files.
+**Purpose:** Validates the user‑provided options passed to `require('unwind').setup(opts)`.
+- Checks types for all documented options.
+- Enforces sane limits on numeric fields (`max_input_bytes`, `max_frames`).
+- Verifies that `path_mappings` keys and values are strings.
+- Returns `true`/`false` with an error message for integration into `init.lua`'s startup validation.
 
-- `resolvers/init.lua`: Coordinates resolver precedence:
-  1. Workspace resolver (`resolvers/workspace.lua`).
-  2. Configured user `path_mappings`.
-  3. Language resolvers (`resolvers/ruby/`).
-- `resolvers/ruby/`:
-  - `environment.lua`: Version discovery (`.ruby-version`, `.tool-versions`, `mise.toml`, `.mise.toml`, `Gemfile`) and runtime environment probing. Caches results per project root to prevent spawning ruby processes repeatedly.
-  - `managers/`: Filesystem-based adapter discovery for `rbenv`, `asdf`, `mise`, `chruby`, `rvm`, and `system`.
-  - `gems.lua`: Exact gem-version resolution against RubyGems installation roots.
-  - `git_gems.lua`: Bundler git gem resolution under `bundler/gems/`.
-  - `stdlib.lua`: Ruby standard library resolution against `rubylibdir`, `archdir`, `sitelibdir`, `vendorlibdir`.
+---
+
+### 10. `lua/unwind/async/parser.lua`
+
+**Purpose:** Non‑blocking background parser.
+- Resolves `parser_worker.lua` via `vim.api.nvim_get_runtime_file` to guarantee correct path regardless of `cwd`.
+- Stores the most recent `uv.spawn` handle in `last_handle`.
+- **Cancel helper** (`M.cancel()`) aborts any in‑flight job, preventing zombie processes when rapid parses are triggered.
+- Falls back to synchronous parsing if spawning fails, ensuring the caller always receives a result.
+- Covered by `tests/async_parser_spec.lua`.
+
+---
+
+### 11. `lua/unwind/resolvers/`
+
+**Purpose:** Multi‑tiered path resolution pipeline.
+
+- `init.lua` – Coordinates resolver precedence: workspace → `path_mappings` → language resolvers.
+- `workspace.lua` – Handles container‑prefix stripping and relative‑to‑root resolution.
+- **`common.lua`** – Shared utilities for all language resolvers (e.g., locating version‑manager binaries, path normalisation helpers). This reduces duplication across the Ruby manager modules.
+- `ruby/` – Ruby‑specific resolution (environment discovery, gem matching, git gem handling, stdlib lookup).
 
 ---
 
 ## Part 4: Key Maintainer Invariants
 
-1. **Zero External Binaries**: All parsing and persistence run in pure native Lua.
-2. **Disk as Authority**: Missing files must be marked `N/A`; loaded in-memory buffers do not override disk state.
-3. **Transactional Persistence**: Memory mutations must roll back if disk writes fail.
-4. **Single-Key Leader Mappings**: Follow `<leader>w` and `<leader>c` single-key conventions.
-5. **Source Window Isolation**: Navigation must never replace the sidebar buffer or floating windows with source buffers.
+1. **Zero External Binaries** – All parsing and persistence run in pure native Lua.
+2. **Disk as Authority** – Missing files must be marked `N/A`; in‑memory buffers never override disk state.
+3. **Transactional Persistence** – Memory mutations must roll back if disk writes fail.
+4. **Single‑Key Leader Mappings** – Follow `<leader>w` and `<leader>c` single‑key conventions.
+5. **Source Window Isolation** – Navigation must never replace the sidebar buffer or floating windows with source buffers.
+
+---
+
+## Part 5: Async Parser Enhancements (Low‑Effort Patches)
+
+The async parser lives in `lua/unwind/async/parser.lua`. Two small but important changes were added to make it more robust:
+
+1. **Absolute worker script resolution** – The worker (`parser_worker.lua`) is now located via
+   ```lua
+   local worker_path = vim.api.nvim_get_runtime_file('lua/unwind/parser_worker.lua', false)[1]
+   ```
+   This guarantees the background process starts correctly even when Neovim's current working directory is not the plugin root.
+2. **Cancel helper** – A public `M.cancel()` function aborts any in‑flight parse job:
+   ```lua
+   function M.cancel()
+     if last_handle and not last_handle:is_closing() then
+       last_handle:kill('sigterm')
+       last_handle = nil
+       return true
+     end
+     return false
+   end
+   ```
+   It is automatically invoked at the start of `M.parse_async` to prevent zombie processes when the user triggers multiple parses in quick succession (e.g., rapidly changing clipboard contents).
+
+Both changes are covered by the new `tests/async_parser_spec.lua` suite and keep the public API unchanged; existing commands (`:UnwindClipboard`, `:UnwindAdd`, etc.) continue to use the async parser transparently.
+
+---
+
+*The maintainer’s onboarding guide (`doc/breakdown.md`) now reflects these async‑parser updates and the collector split, and the old report artifact has been deprecated.*

@@ -3,11 +3,11 @@
 
 package.path = "./lua/?.lua;./lua/?/init.lua;" .. package.path
 local parser = require("unwind.parser")
-local uv = vim.loop
-local inspect = vim.inspect
+local uv = vim.uv or vim.loop
 
 local fixtures_dir = "tests/fixtures"
 local golden_dir = fixtures_dir .. "/parser_golden"
+local golden_root = "/__unwind_golden_root__"
 
 local function read_file(path)
   local fd = uv.fs_open(path, "r", 438) -- 0666
@@ -40,11 +40,11 @@ end
 
 local fixtures = list_files(fixtures_dir)
 for _, name in ipairs(fixtures) do
-  if not name:match("%.golden$") then
+  if not name:match("%.golden$") and name ~= "parser_golden" then
     local fixture_path = fixtures_dir .. "/" .. name
     local golden_path = golden_dir .. "/" .. name .. ".golden"
     local content = read_file(fixture_path)
-    local actual = parser.parse(content)
+    local actual = parser.parse(content, { root = golden_root })
     local expected = load_golden(golden_path)
     if not vim.deep_equal(actual, expected) then
       error(string.format("Parser output for %s does not match golden file", name))

@@ -1,0 +1,51 @@
+{ {
+    col = 12,
+    file = "/var/task/src/auth/session.js",
+    line = 45,
+    method = "AuthService.validateSession",
+    navigable = false,
+    origin = "stacktrace",
+    path = "/var/task/src/auth/session.js",
+    raw_line = "    at AuthService.validateSession (/var/task/src/auth/session.js:45:12)",
+    resolved_path = "/var/task/src/auth/session.js"
+  }, {
+    col = 7,
+    file = "/app/src/middleware/verify.js",
+    line = 18,
+    method = "verifyToken",
+    navigable = false,
+    origin = "stacktrace",
+    path = "/app/src/middleware/verify.js",
+    raw_line = "    at verifyToken (/app/src/middleware/verify.js:18:7)",
+    resolved_path = "/app/src/middleware/verify.js"
+  }, {
+    col = 5,
+    file = "/app/src/server.js",
+    line = 80,
+    method = "",
+    navigable = false,
+    origin = "stacktrace",
+    path = "/app/src/server.js",
+    raw_line = "    at /app/src/server.js:80:5",
+    resolved_path = "/app/src/server.js"
+  }, {
+    col = 5,
+    file = "/app/node_modules/express/lib/router/layer.js",
+    line = 95,
+    method = "Layer.handle [as handle_request]",
+    navigable = false,
+    origin = "stacktrace",
+    path = "/app/node_modules/express/lib/router/layer.js",
+    raw_line = "    at Layer.handle [as handle_request] (/app/node_modules/express/lib/router/layer.js:95:5)",
+    resolved_path = "/app/node_modules/express/lib/router/layer.js"
+  }, {
+    col = 12,
+    file = "at /path/to/file.js",
+    line = 45,
+    method = "",
+    navigable = false,
+    origin = "stacktrace",
+    path = "at /path/to/file.js",
+    raw_line = "    at at /path/to/file.js:45:12",
+    resolved_path = "/__unwind_golden_root__/at /path/to/file.js"
+  } }

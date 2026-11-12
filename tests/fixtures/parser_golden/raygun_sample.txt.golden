@@ -1,0 +1,51 @@
+{ {
+    col = 1,
+    file = "/app/src/Controllers/CheckoutController.cs",
+    line = 104,
+    method = "SampleApp.Controllers.CheckoutController.ProcessPayment(OrderRequest request)",
+    navigable = false,
+    origin = "stacktrace",
+    path = "/app/src/Controllers/CheckoutController.cs",
+    raw_line = "    at SampleApp.Controllers.CheckoutController.ProcessPayment(OrderRequest request) in /app/src/Controllers/CheckoutController.cs:line 104",
+    resolved_path = "/app/src/Controllers/CheckoutController.cs"
+  }, {
+    col = 1,
+    file = "/app/src/Services/PaymentService.cs",
+    line = 42,
+    method = "SampleApp.Services.PaymentService.ExecuteTransaction(PaymentDetails details)",
+    navigable = false,
+    origin = "stacktrace",
+    path = "/app/src/Services/PaymentService.cs",
+    raw_line = "    at SampleApp.Services.PaymentService.ExecuteTransaction(PaymentDetails details) in /app/src/Services/PaymentService.cs:line 42",
+    resolved_path = "/app/src/Services/PaymentService.cs"
+  }, {
+    col = 1,
+    file = "C:/workspace/src/Handlers/OrderHandler.cs",
+    line = 78,
+    method = "SampleApp.Handlers.OrderHandler.Handle(OrderCommand cmd)",
+    navigable = false,
+    origin = "stacktrace",
+    path = "C:/workspace/src/Handlers/OrderHandler.cs",
+    raw_line = "    at SampleApp.Handlers.OrderHandler.Handle(OrderCommand cmd) in C:/workspace/src/Handlers/OrderHandler.cs:line 78",
+    resolved_path = "C:/workspace/src/Handlers/OrderHandler.cs"
+  }, {
+    col = 1,
+    file = "UserService.java",
+    line = 55,
+    method = "com.example.service.UserService.findUser",
+    navigable = false,
+    origin = "stacktrace",
+    path = "UserService.java",
+    raw_line = "    at com.example.service.UserService.findUser(UserService.java:55)",
+    resolved_path = "/__unwind_golden_root__/UserService.java"
+  }, {
+    col = 1,
+    file = "AuthFilter.java",
+    line = 120,
+    method = "com.example.service.AuthFilter.doFilter",
+    navigable = false,
+    origin = "stacktrace",
+    path = "AuthFilter.java",
+    raw_line = "    at com.example.service.AuthFilter.doFilter(AuthFilter.java:120)",
+    resolved_path = "/__unwind_golden_root__/AuthFilter.java"
+  } }

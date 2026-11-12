@@ -1,6 +1,5 @@
--- lua/unwind/persistence.lua
--- Atomic state persistence and serialization for saved Unwind sessions
--- Disk format schema version 1.
+---@module "unwind.persistence"
+--- Atomic state persistence and serialization for saved Unwind sessions (Disk schema v1).
 
 local M = {}
 

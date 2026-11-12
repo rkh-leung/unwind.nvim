@@ -1,6 +1,6 @@
--- lua/unwind/sidebar.lua
--- Persistent right-hand vertical split call-trace sidebar
--- Yazi-style persistent pane displaying the active debugging session
+---@module "unwind.sidebar"
+--- Persistent right-hand vertical split call-trace sidebar.
+--- Yazi-style persistent pane displaying the active debugging session.
 
 local M = {}
 

@@ -32,7 +32,9 @@ vim.api.nvim_create_user_command("Unwind", function(opts)
 end, { nargs = "?", complete = "file", desc = "Ingest stacktrace from file or open interactive input window" })
 
 vim.api.nvim_create_user_command("UnwindMenu", function()
-  require("unwind").menu()
+  vim.schedule(function()
+    require("unwind").menu()
+  end)
 end, { desc = "Toggle persistent session manager" })
 
 vim.api.nvim_create_user_command("UnwindAdd", function()

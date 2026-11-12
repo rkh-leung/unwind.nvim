@@ -1,0 +1,51 @@
+{ {
+    col = 1,
+    file = "app/controllers/users_controller.rb",
+    line = 25,
+    method = "show",
+    navigable = false,
+    origin = "stacktrace",
+    path = "app/controllers/users_controller.rb",
+    raw_line = "app/controllers/users_controller.rb:25:in `show': undefined method `email' for nil:NilClass (NoMethodError)",
+    resolved_path = "/__unwind_golden_root__/app/controllers/users_controller.rb"
+  }, {
+    col = 1,
+    file = "/var/task/app/services/user_finder.rb",
+    line = 42,
+    method = "find_user",
+    navigable = false,
+    origin = "stacktrace",
+    path = "/var/task/app/services/user_finder.rb",
+    raw_line = "\tfrom /var/task/app/services/user_finder.rb:42:in `find_user'",
+    resolved_path = "/var/task/app/services/user_finder.rb"
+  }, {
+    col = 1,
+    file = "/app/lib/auth/authenticator.rb",
+    line = 18,
+    method = "authenticate!",
+    navigable = false,
+    origin = "stacktrace",
+    path = "/app/lib/auth/authenticator.rb",
+    raw_line = "\tfrom /app/lib/auth/authenticator.rb:18:in 'authenticate!'",
+    resolved_path = "/app/lib/auth/authenticator.rb"
+  }, {
+    col = 1,
+    file = "config/initializers/warden.rb",
+    line = 10,
+    method = "<main>",
+    navigable = false,
+    origin = "stacktrace",
+    path = "config/initializers/warden.rb",
+    raw_line = "\tfrom config/initializers/warden.rb:10:in '<main>'",
+    resolved_path = "/__unwind_golden_root__/config/initializers/warden.rb"
+  }, {
+    col = 1,
+    file = "/path/to/script.rb",
+    line = 5,
+    method = "<top (required)>",
+    navigable = false,
+    origin = "stacktrace",
+    path = "/path/to/script.rb",
+    raw_line = "\tfrom /path/to/script.rb:5:in '<top (required)>'",
+    resolved_path = "/path/to/script.rb"
+  } }

@@ -1,5 +1,7 @@
--- lua/unwind/resolvers/ruby/managers/chruby.lua
--- chruby / ruby-install Ruby manager adapter
+---@module "unwind.resolvers.ruby.managers.chruby"
+--- chruby / ruby-install Ruby manager adapter
+
+local common = require("unwind.resolvers.common")
 
 local M = {}
 
@@ -7,11 +9,11 @@ local M = {}
 ---@param root string
 ---@return boolean
 function M.detect(root)
-  local home = os.getenv("HOME")
-  if (vim.uv or vim.loop).fs_stat("/opt/rubies") then
+  local home = common.getenv("HOME")
+  if common.exists("/opt/rubies") then
     return true
   end
-  if home and (vim.uv or vim.loop).fs_stat(home .. "/.rubies") then
+  if home and common.exists(home .. "/.rubies") then
     return true
   end
   return false
@@ -26,18 +28,16 @@ function M.find_ruby(version)
   end
 
   local candidate_roots = { "/opt/rubies" }
-  local home = os.getenv("HOME")
-  if home and home ~= "" then
+  local home = common.getenv("HOME")
+  if home then
     table.insert(candidate_roots, home .. "/.rubies")
   end
 
   for _, root in ipairs(candidate_roots) do
-    -- chruby folders can be <version> or ruby-<version>
     local try_dirs = { root .. "/" .. version, root .. "/ruby-" .. version }
     for _, dir in ipairs(try_dirs) do
       local ruby_bin = dir .. "/bin/ruby"
-      local stat = (vim.uv or vim.loop).fs_stat(ruby_bin)
-      if stat and (stat.type == "file" or stat.type == "link") then
+      if common.is_executable_file(ruby_bin) then
         return ruby_bin
       end
     end

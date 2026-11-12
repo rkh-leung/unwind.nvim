@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  lint:
+    name: Lint & Style Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Luacheck / Selene
+        run: |
+          sudo apt-get update && sudo apt-get install -y luarocks
+          sudo luarocks install luacheck || true
+
+      - name: Run Luacheck (if available)
+        run: |
+          if command -v luacheck >/dev/null 2>&1; then
+            luacheck lua/ tests/ --std max+busted --no-color || true
+          fi
+
+  test:
+    name: Test Suite (Neovim ${{ matrix.neovim_version }} - ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+        neovim_version:
+          - "v0.10.0"
+          - "stable"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Neovim
+        uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: ${{ matrix.neovim_version }}
+
+      - name: Run test suite
+        run: |
+          chmod +x ./scripts/test.sh
+          ./scripts/test.sh
+
+  benchmark:
+    name: Microbenchmark Execution
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Neovim
+        uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: "stable"
+
+      - name: Run benchmarks
+        run: |
+          chmod +x ./scripts/benchmark.sh
+          ./scripts/benchmark.sh

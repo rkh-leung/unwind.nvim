@@ -1,5 +1,5 @@
--- lua/unwind/ui.lua
--- Session Manager Floating Menu & Input Prompts
+---@module "unwind.ui"
+--- Session Manager floating menu & interactive input prompts.
 
 local M = {}
 

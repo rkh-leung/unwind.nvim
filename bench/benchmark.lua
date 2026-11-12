@@ -374,6 +374,30 @@ do
   end))
 end
 
+-- 15. Async parsing latency
+do
+  local async_parser = require("unwind.async.parser")
+  local test_trace = [[
+Traceback (most recent call last):
+  File "app/main.py", line 42, in run
+    service.execute()
+  File "app/service.py", line 105, in execute
+    db.query()
+  File "lib/db.py", line 12, in query
+    raise ConnectionError("timeout")
+]]
+  table.insert(results, benchmark("Async parser latency (small trace)", 10, function()
+    local done = false
+    async_parser.parse_async(test_trace, function()
+      done = true
+    end)
+    local start_t = uv.hrtime()
+    while not done and (uv.hrtime() - start_t) < 5e9 do
+      vim.wait(5, function() return done end)
+    end
+  end, 2))
+end
+
 print("=========================================================================")
 print("Benchmark run complete.")
 print("=========================================================================")

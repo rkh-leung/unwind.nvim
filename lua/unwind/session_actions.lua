@@ -1,5 +1,5 @@
--- lua/unwind/session_actions.lua
--- Session modifications, frame mutations, filter reapplication, and availability refresh
+---@module "unwind.session_actions"
+--- Session modifications, frame mutations, filter reapplication, and availability refresh.
 
 local collector = require("unwind.collector")
 local decorator = require("unwind.decorator")

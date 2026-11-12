@@ -1,5 +1,5 @@
--- lua/unwind/export.lua
--- Markdown export for active Unwind debugging sessions respecting filter state
+---@module "unwind.export"
+--- Markdown export for active Unwind debugging sessions respecting filter state.
 
 local path_util = require("unwind.path")
 local source_extract = require("unwind.source_extract")

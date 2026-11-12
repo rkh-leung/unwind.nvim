@@ -1,5 +1,5 @@
--- lua/unwind/navigation.lua
--- Buffer navigation, cursor jumping, frame cycling, file cycling, and quickfix export
+---@module "unwind.navigation"
+--- Buffer navigation, cursor jumping, frame cycling, file cycling, and quickfix export.
 
 local parser = require("unwind.parser")
 local path_util = require("unwind.path")

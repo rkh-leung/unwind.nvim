@@ -1,5 +1,5 @@
--- lua/unwind/location.lua
--- Tree-sitter function and declaration resolver with graceful fallback to cursor location
+---@module "unwind.location"
+--- Tree-sitter function and declaration resolver with graceful fallback to cursor location.
 
 local M = {}
 

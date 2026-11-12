@@ -32,7 +32,7 @@ TOTAL=0
 PASSED=0
 
 # Discover all test files under tests/ ending in _spec.lua
-TEST_FILES=$(git ls-files 'tests/*_spec.lua' 'tests/**/*_spec.lua' | sort -u)
+TEST_FILES=$(git ls-files --cached --others --exclude-standard 'tests/*_spec.lua' 'tests/**/*_spec.lua' | sort -u)
 
 for test_file in ${TEST_FILES}; do
   TOTAL=$((TOTAL + 1))
