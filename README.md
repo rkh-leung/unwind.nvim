@@ -239,7 +239,7 @@ All leader keymaps follow single-key mappings:
 
 ## Running Tests and Benchmarks
 
-Run the isolated test runner across all test suites:
+Run the isolated test runner across all test suites (including the new parser equivalence golden tests):
 
 ```bash
 ./scripts/test.sh
