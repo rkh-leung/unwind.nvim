@@ -4,10 +4,13 @@
 local collector = require("unwind.collector")
 local decorator = require("unwind.decorator")
 local sessions = require("unwind.sessions")
-local sidebar = require("unwind.sidebar")
 local ui = require("unwind.ui")
 local parser = require("unwind.parser")
 local navigation = require("unwind.navigation")
+
+local function get_sidebar()
+  return require("unwind.sidebar")
+end
 
 local M = {}
 
@@ -112,7 +115,7 @@ function M.reapply_filter(session, config)
   if #session.frames == 0 then
     session.active_index = 0
     session.active_file_index = 0
-    sidebar.render(session)
+    get_sidebar().render(session)
     return
   end
 
@@ -142,7 +145,7 @@ function M.reapply_filter(session, config)
     session.active_file_index = 1
   end
 
-  sidebar.render(session)
+  get_sidebar().render(session)
 end
 
 local function same_session(a, b)
@@ -221,7 +224,7 @@ end
 function M.refresh_active_presentation(session)
   if not session or not session.frames or #session.frames == 0 then
     decorator.clear()
-    sidebar.render(session)
+    get_sidebar().render(session)
     return
   end
 
@@ -231,8 +234,8 @@ function M.refresh_active_presentation(session)
     session.active_index = idx
   end
 
-  sidebar.render(session)
-  sidebar.set_active(session, idx)
+  get_sidebar().render(session)
+  get_sidebar().set_active(session, idx)
 
   local frame = session.frames[idx]
   if not frame then
@@ -321,7 +324,7 @@ function M.replace_frame_in_session(session, frame_idx, saved_sessions, config)
   end
 
   ui.ensure_source_window()
-  sidebar.ensure_source_window()
+  get_sidebar().ensure_source_window()
 
   local bufnr = vim.api.nvim_get_current_buf()
   local bufname = vim.api.nvim_buf_get_name(bufnr)
@@ -375,11 +378,31 @@ function M.replace_frame_in_session(session, frame_idx, saved_sessions, config)
     if ok then
       M.rebuild_derived(session, config)
       session.active_index = frame_idx
-      sidebar.render(session)
+      get_sidebar().render(session)
       navigation.jump_to_frame(session, frame_idx)
       vim.notify(string.format("Unwind: Replaced frame %d with %s:%d.", frame_idx, frame_data.file, frame_data.line), vim.log.levels.INFO)
     end
   end
+end
+
+--- Replace all raw frames in session and rebuild derived state
+---@param session table
+---@param new_raw_frames table[]
+---@param saved_sessions table[]
+---@param config table
+---@return boolean ok
+---@return any err
+function M.replace_frames_in_session(session, new_raw_frames, saved_sessions, config)
+  if not session then
+    return false, "No session"
+  end
+  local ok, err = sessions.replace_frames(session, new_raw_frames, saved_sessions)
+  if not ok then
+    return false, err
+  end
+  M.rebuild_derived(session, config)
+  M.refresh_active_presentation(session)
+  return true, nil
 end
 
 --- Annotate a frame in session
@@ -467,7 +490,7 @@ function M.annotate_frame_in_session(session, frame_idx_or_target, note_text, sa
   end
 
   M.rebuild_derived(session, config)
-  sidebar.render(session)
+  get_sidebar().render(session)
 
   -- Find where the frame is in derived frames now
   local updated_visible_idx = nil
@@ -515,7 +538,7 @@ function M.delete_frame_from_session(session, frame_idx, saved_sessions, config)
     session.active_index = 0
     session.active_file_index = 0
     decorator.clear()
-    sidebar.render(session)
+    get_sidebar().render(session)
   else
     local new_index = nil
     if previous_active_frame and previous_active_frame ~= target_frame then
@@ -531,7 +554,7 @@ function M.delete_frame_from_session(session, frame_idx, saved_sessions, config)
       new_index = math.max(1, math.min(frame_idx, #session.frames))
     end
 
-    sidebar.render(session)
+    get_sidebar().render(session)
     navigation.jump_to_frame(session, new_index)
   end
 end

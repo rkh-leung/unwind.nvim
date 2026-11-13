@@ -207,12 +207,11 @@ app/models/brand.rb:5:in `name'
   local side_buf = vim.fn.bufnr("unwind://sidebar")
   assert_true(side_buf ~= -1, "sidebar buffer found")
   local lines = vim.api.nvim_buf_get_lines(side_buf, 0, -1, false)
-  -- Row for frame 3 should have ● indicator
-  -- lines: 0=Header, 1="", 2=frame 1, 3=frame 2, 4=frame 3
-  local frame3_line = lines[5] -- 1-indexed in Lua
-  assert_true(frame3_line:find("●") ~= nil, "frame 3 row contains ● indicator: " .. frame3_line)
-  local frame1_line = lines[3]
-  assert_true(frame1_line:find("●") == nil, "frame 1 row does not contain ● indicator: " .. frame1_line)
+  -- In mini.files-style 1:1 buffer, line 1 is frame 1, line 3 is frame 3
+  local frame3_line = lines[3]
+  assert_true(frame3_line and frame3_line:find("●") ~= nil, "frame 3 row contains ● indicator: " .. tostring(frame3_line))
+  local frame1_line = lines[1]
+  assert_true(frame1_line and frame1_line:find("●") == nil, "frame 1 row does not contain ● indicator: " .. tostring(frame1_line))
 
   sidebar.hide()
   unwind.clear()
@@ -320,8 +319,8 @@ do
     end
   end
   assert_true(side_win ~= nil, "sidebar window open")
-  -- Position cursor on frame 1 in sidebar (line 3)
-  vim.api.nvim_win_set_cursor(side_win, { 3, 0 })
+  -- Position cursor on frame 1 in sidebar (line 1 in 1:1 buffer)
+  vim.api.nvim_win_set_cursor(side_win, { 1, 0 })
 
   prompt_called = false
   ui.prompt_input = function(title, default_val, on_submit)

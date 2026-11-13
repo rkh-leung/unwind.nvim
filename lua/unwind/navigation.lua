@@ -4,8 +4,11 @@
 local parser = require("unwind.parser")
 local path_util = require("unwind.path")
 local decorator = require("unwind.decorator")
-local sidebar = require("unwind.sidebar")
 local ui = require("unwind.ui")
+
+local function get_sidebar()
+  return require("unwind.sidebar")
+end
 
 local M = {}
 
@@ -106,13 +109,13 @@ function M.jump_to_frame(session, idx)
     end
 
     decorator.clear()
-    sidebar.set_active(session, idx)
+    get_sidebar().set_active(session, idx)
     vim.notify("Unwind: File not found: " .. tostring(frame.file), vim.log.levels.WARN)
     return true, false
   end
 
   ui.ensure_source_window()
-  sidebar.ensure_source_window()
+  get_sidebar().ensure_source_window()
 
   local target_path = resolved_path or frame.resolved_path or frame.file
   if not path_util.is_absolute(target_path) then
@@ -136,7 +139,7 @@ function M.jump_to_frame(session, idx)
         vim.notify("Unwind: Could not open file " .. tostring(frame.file) .. ": " .. tostring(err), vim.log.levels.ERROR)
         session.active_index = idx
         decorator.clear()
-        sidebar.set_active(session, idx)
+        get_sidebar().set_active(session, idx)
         return true, false
       end
     end
@@ -170,7 +173,7 @@ function M.jump_to_frame(session, idx)
     origin = frame.origin,
     note = frame.note,
   })
-  sidebar.set_active(session, idx)
+  get_sidebar().set_active(session, idx)
   return true, true
 end
 

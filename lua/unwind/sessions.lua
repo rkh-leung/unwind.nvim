@@ -14,6 +14,14 @@ local function next_session_id()
   return string.format("sess_%d_%d", os.time(), session_id_seq)
 end
 
+--- Counter for runtime frame UIDs
+local next_frame_uid = 0
+
+local function alloc_frame_uid()
+  next_frame_uid = next_frame_uid + 1
+  return next_frame_uid
+end
+
 --- Delegates storage path computation to persistence module (backwards-compatible)
 function M.storage_path(root)
   return persistence.storage_path(root)
@@ -56,7 +64,13 @@ local function normalize_frame(frame)
     end
   end
 
+  local uid = frame.uid
+  if uid == nil then
+    uid = alloc_frame_uid()
+  end
+
   return {
+    uid = uid,
     path = path,
     file = file,
     line = line,
@@ -72,6 +86,21 @@ local function normalize_frame(frame)
     resolution = resolution,
     note = note,
   }
+end
+
+--- Shallow-copy all fields of frame, assign fresh uid, and clear derived fields
+---@param frame table
+---@return table cloned
+function M.clone_frame(frame)
+  if not frame then return nil end
+  local cloned = {}
+  for k, v in pairs(frame) do
+    cloned[k] = v
+  end
+  cloned.uid = alloc_frame_uid()
+  cloned.raw_index = nil
+  cloned.file_index = nil
+  return cloned
 end
 
 --- Create a new session
@@ -355,6 +384,39 @@ function M.move_frame(session, from_idx, to_idx, session_list)
     return function()
       local moved = table.remove(s.raw_frames, to_idx)
       table.insert(s.raw_frames, from_idx, moved)
+    end
+  end, session_list)
+end
+
+--- Batch replace session raw frames using transactional mutate
+---@param session table
+---@param new_raw_frames table[]
+---@param session_list? table[]
+---@return boolean ok
+---@return any err
+function M.replace_frames(session, new_raw_frames, session_list)
+  if not session or not new_raw_frames then
+    return false, "Invalid session or new_raw_frames"
+  end
+
+  local normalized_list = {}
+  for _, f in ipairs(new_raw_frames) do
+    table.insert(normalized_list, normalize_frame(f))
+  end
+
+  return mutate(session, function(s)
+    local old_raw_frames = s.raw_frames
+    local old_active = s.active_index
+    s.raw_frames = normalized_list
+    if #normalized_list == 0 then
+      s.active_index = 0
+    else
+      local cur_active = s.active_index or 1
+      s.active_index = math.max(1, math.min(cur_active, #normalized_list))
+    end
+    return function()
+      s.raw_frames = old_raw_frames
+      s.active_index = old_active
     end
   end, session_list)
 end

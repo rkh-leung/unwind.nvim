@@ -133,11 +133,15 @@ do
   end
   assert_true(side_win ~= nil, "sidebar window found")
 
-  -- Position cursor on frame 2 (line 4 in buffer)
-  vim.api.nvim_win_set_cursor(side_win, { 4, 0 })
+  -- Position cursor on frame 2 (line 2 in mini.files-style 1:1 buffer)
+  vim.api.nvim_win_set_cursor(side_win, { 2, 0 })
+  -- Disable sync confirmation so dd= does not block headless execution
+  unwind.setup({ confirm_sync = false })
   vim.api.nvim_win_call(side_win, function()
-    vim.cmd([[execute "normal d"]])
+    vim.cmd([[execute "normal dd="]])
   end)
+  -- Restore confirm_sync to default
+  unwind.setup({ confirm_sync = true })
 
   -- Session B should have 2 frames left, and Session A must remain untouched with 2 frames
   assert_eq(#sess_b.frames, 2, "session B frame was deleted")

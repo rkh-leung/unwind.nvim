@@ -37,13 +37,39 @@ vim.api.nvim_create_user_command("UnwindMenu", function()
   end)
 end, { desc = "Toggle persistent session manager" })
 
-vim.api.nvim_create_user_command("UnwindAdd", function()
-  require("unwind").add_current_location()
-end, { desc = "Add current source location to active debugging session" })
+vim.api.nvim_create_user_command("UnwindAdd", function(opts)
+  local arg = opts.args and vim.trim(opts.args) or ""
+  local num = tonumber(arg)
+  if num then
+    require("unwind").add_current_location({ index = num })
+  else
+    require("unwind").add_current_location()
+  end
+end, { nargs = "?", desc = "Add current source location to active debugging session" })
+
+vim.api.nvim_create_user_command("UnwindAddBefore", function()
+  require("unwind").add_current_location({ position = "before_active" })
+end, { desc = "Add current source location before active frame" })
+
+vim.api.nvim_create_user_command("UnwindAddAfter", function()
+  require("unwind").add_current_location({ position = "after_active" })
+end, { desc = "Add current source location after active frame" })
 
 vim.api.nvim_create_user_command("UnwindSidebar", function()
   require("unwind").toggle_sidebar()
 end, { desc = "Toggle persistent call-trace sidebar" })
+
+vim.api.nvim_create_user_command("UnwindBuffer", function()
+  require("unwind").open_buffer()
+end, { desc = "Open unwind buffer in current window" })
+
+vim.api.nvim_create_user_command("UnwindSearch", function(opts)
+  require("unwind").search()
+end, { desc = "Fuzzy search call trace frames" })
+
+vim.api.nvim_create_user_command("UnwindFind", function(opts)
+  require("unwind").search()
+end, { desc = "Fuzzy search call trace frames (alias for UnwindSearch)" })
 
 vim.api.nvim_create_user_command("UnwindAnnotate", function()
   require("unwind").annotate()

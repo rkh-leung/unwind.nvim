@@ -4,9 +4,10 @@
 local M = {}
 
 local function clean_error(err)
-  if not err then return "unknown error" end
+  if not err then
+    return "unknown error"
+  end
   local str = tostring(err)
-  -- Remove stack trace or file/line prefixes if present
   local msg = str:match(":%d+:%s*(.+)$") or str
   return msg
 end
@@ -32,10 +33,21 @@ function M.validate(opts)
     export = { opts.export, "table", true },
     keymaps = { opts.keymaps, { "table", "boolean" }, true },
     force_keymaps = { opts.force_keymaps, "boolean", true },
+    add_position = { opts.add_position, "string", true },
+    confirm_sync = { opts.confirm_sync, "boolean", true },
+    picker = { opts.picker, { "string", "function" }, true },
   })
 
   if not ok then
     return false, clean_error(err)
+  end
+
+  if opts.add_position and opts.add_position ~= "after_active" and opts.add_position ~= "before_active" and opts.add_position ~= "end" then
+    return false, "add_position must be 'after_active', 'before_active', or 'end'"
+  end
+
+  if opts.picker and type(opts.picker) == "string" and opts.picker == "" then
+    return false, "picker cannot be an empty string"
   end
 
   if opts.max_input_bytes and opts.max_input_bytes <= 0 then

@@ -1477,17 +1477,17 @@ do
 
   -- Activate session
   unwind.activate_session(reloaded[1])
-  local side_buf = vim.fn.bufnr("unwind://sidebar")
-  assert_true(side_buf ~= -1, "sidebar buffer found")
-  local lines = vim.api.nvim_buf_get_lines(side_buf, 0, -1, false)
-  local footer_found = false
-  for _, l in ipairs(lines) do
-    if l:find("1/1 tests/fixtures/dummy.txt:1") then
-      footer_found = true
+  local side_win = nil
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    if test_sidebar.is_sidebar_window(w) then
+      side_win = w
       break
     end
   end
-  assert_true(footer_found, "footer must be present after activating reloaded session, lines: " .. vim.inspect(lines))
+  assert_true(side_win ~= nil, "sidebar window found")
+  local stl = vim.wo[side_win].statusline or ""
+  local footer_found = stl:find("1/1 tests/fixtures/dummy.txt:1") ~= nil
+  assert_true(footer_found, "footer statusline must be present after activating reloaded session, statusline: " .. vim.inspect(stl))
 
   test_sidebar.hide()
   test_sessions.delete(reloaded[1], unwind.state.sessions, test_root)
@@ -1495,7 +1495,7 @@ do
   unwind.clear()
 end
 
-print("--> [Review Regression 6] <CR> and 'd' on sidebar blank/footer rows do not jump...")
+print("--> [Review Regression 6] Chrome isolated from buffer lines (strictly 1:1 frame rows)...")
 do
   local test_sidebar = require("unwind.sidebar")
   unwind.clear()
@@ -1516,28 +1516,29 @@ do
   end
   assert_true(side_win ~= nil, "sidebar window found")
 
-  -- Position sidebar cursor on the footer row (last row)
   local side_buf = vim.api.nvim_win_get_buf(side_win)
   local line_count = vim.api.nvim_buf_line_count(side_buf)
-  vim.api.nvim_win_set_cursor(side_win, { line_count, 0 })
+  -- Exactly 2 lines in buffer corresponding 1:1 to the 2 frames
+  assert_eq(line_count, 2, "buffer lines strictly match frame count (line 1 == frame 1, line 2 == frame 2)")
 
   -- Make frame 1 active
   s.active_index = 1
 
-  -- Press <CR> on footer row
+  -- <CR> on line 1 jumps to frame 1
+  vim.api.nvim_win_set_cursor(side_win, { 1, 0 })
   vim.api.nvim_win_call(side_win, function()
     vim.cmd([[execute "normal \<CR>"]])
   end)
+  assert_eq(s.active_index, 1, "<CR> on line 1 activates frame 1")
 
-  -- active_index must remain 1, NOT jump to frame 2 (last frame)
-  assert_eq(s.active_index, 1, "<CR> on footer row must not change active_index")
-
-  -- Press 'd' on footer row
+  -- 'd' is unmapped for native vim motions, so executing 'd' does not trigger plugin deletion callback directly
   local frames_count_before = #s.frames
   vim.api.nvim_win_call(side_win, function()
-    vim.cmd([[execute "normal d"]])
+    vim.cmd([[execute "normal dd"]])
   end)
-  assert_eq(#s.frames, frames_count_before, "'d' on footer row must not delete any frame")
+  -- Buffer line was cut with dd (standard Vim motion), but session.frames is unchanged until = sync
+  assert_eq(#s.frames, frames_count_before, "dd edits buffer without mutating session until = sync")
+  assert_eq(vim.bo[side_buf].modified, true, "buffer is marked modified after dd")
 
   test_sidebar.hide()
   unwind.clear()

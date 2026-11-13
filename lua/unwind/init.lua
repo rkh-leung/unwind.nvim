@@ -29,6 +29,9 @@ M.register_ui_component = hooks.register_ui_component
 M.unregister_ui_component = hooks.unregister_ui_component
 M.register_exporter = hooks.register_exporter
 M.unregister_exporter = hooks.unregister_exporter
+M.register_picker = hooks.register_picker
+M.unregister_picker = hooks.unregister_picker
+M.get_picker = hooks.get_picker
 M.on_event = hooks.on_event
 M.off_event = hooks.off_event
 
@@ -59,6 +62,9 @@ M.config = {
     next_file = "]f",
     prev_file = "[f",
   },
+  add_position = "after_active",
+  confirm_sync = true,
+  picker = "auto",
 }
 
 --- Compatibility access to installed keymaps
@@ -444,7 +450,9 @@ function M.prompt_save_session(session)
 end
 
 --- Add current source location to active session
-function M.add_current_location()
+---@param opts? { position?: "after_active"|"before_active"|"end", index?: number }
+function M.add_current_location(opts)
+  opts = opts or {}
   ui.ensure_source_window()
   sidebar.ensure_source_window()
 
@@ -503,22 +511,77 @@ function M.add_current_location()
     state.set_current(session)
   end
 
-  local ok, err = sessions.add_frame(session, frame_data, nil, state.raw.sessions)
+  local raw_frames = session.raw_frames or {}
+  local insert_idx = nil
+  if type(opts.index) == "number" and opts.index >= 1 and opts.index <= #raw_frames + 1 then
+    insert_idx = math.floor(opts.index)
+  else
+    local pos = opts.position or M.config.add_position or "after_active"
+    local active_idx = session.active_index or 0
+    local active_frame = (active_idx > 0 and session.frames) and session.frames[active_idx] or nil
+    if pos == "after_active" then
+      if active_frame then
+        local raw_idx = active_frame.raw_index or active_idx
+        insert_idx = raw_idx + 1
+      else
+        insert_idx = #raw_frames + 1
+      end
+    elseif pos == "before_active" then
+      if active_frame then
+        local raw_idx = active_frame.raw_index or active_idx
+        insert_idx = raw_idx
+      else
+        insert_idx = 1
+      end
+    elseif pos == "end" then
+      insert_idx = #raw_frames + 1
+    else
+      insert_idx = #raw_frames + 1
+    end
+  end
+
+  if insert_idx < 1 then insert_idx = 1 end
+  if insert_idx > #raw_frames + 1 then insert_idx = #raw_frames + 1 end
+
+  local ok, err = sessions.add_frame(session, frame_data, insert_idx, state.raw.sessions)
   if not ok then
     vim.notify("Unwind: Failed to add location: " .. tostring(err or "persistence error"), vim.log.levels.ERROR)
     return
   end
 
+  local inserted_raw_frame = session.raw_frames[insert_idx]
+
   M.rebuild_derived(session)
 
+  local buffer_mod = require("unwind.buffer")
+
   if not sidebar.is_open() then
-    sidebar.open(session, get_sidebar_callbacks(session))
+    -- Only open sidebar if the unwind buffer is not already visible in any window
+    local unwind_buf = buffer_mod.get_or_create()
+    local buf_winid = vim.fn.bufwinid(unwind_buf)
+    if buf_winid == -1 then
+      sidebar.open(session, get_sidebar_callbacks(session))
+    else
+      buffer_mod.render(session, unwind_buf)
+    end
   else
     sidebar.render(session)
   end
 
-  session.active_index = #session.frames
-  M.jump_to_frame(#session.frames)
+  local new_derived_idx = nil
+  for d_idx, f in ipairs(session.frames or {}) do
+    if f == inserted_raw_frame or f.raw_index == insert_idx or (inserted_raw_frame and f.uid == inserted_raw_frame.uid) then
+      new_derived_idx = d_idx
+      break
+    end
+  end
+
+  if not new_derived_idx then
+    new_derived_idx = #session.frames
+  end
+
+  session.active_index = new_derived_idx
+  M.jump_to_frame(new_derived_idx)
   vim.notify(string.format("Unwind: Added location %s:%d to session.", frame_data.file or frame_data.path, frame_data.line), vim.log.levels.INFO)
 end
 
@@ -629,20 +692,43 @@ function M.menu()
   })
 end
 
+--- Open right vertical split sidebar
+function M.open_sidebar()
+  local session = state.current()
+  if session then
+    sidebar.open(session, get_sidebar_callbacks(session))
+  else
+    vim.notify("Unwind: No active session to display in sidebar.", vim.log.levels.WARN)
+  end
+end
+
+--- Open unwind call-trace buffer in current window
+function M.open_buffer()
+  local session = state.current()
+  if not session then
+    session = sessions.create({
+      root = state.get_root(),
+      name = nil,
+      transient = true,
+      filter_enabled = M.config.filter_out_of_project or false,
+    })
+    state.set_current(session)
+  end
+
+  local buffer_mod = require("unwind.buffer")
+  local buf = buffer_mod.get_or_create()
+  local cur_win = vim.api.nvim_get_current_win()
+  vim.api.nvim_set_current_buf(buf)
+  buffer_mod.configure_window(cur_win)
+  buffer_mod.render(session, buf, cur_win)
+end
+
 --- Toggle right sidebar
 function M.toggle_sidebar()
   if sidebar.is_open() then
     sidebar.hide()
   else
-    local session = state.current()
-    if session then
-      sidebar.open(
-        session,
-        get_sidebar_callbacks(session)
-      )
-    else
-      vim.notify("Unwind: No active session to display in sidebar.", vim.log.levels.WARN)
-    end
+    M.open_sidebar()
   end
 end
 
@@ -671,6 +757,23 @@ end
 function M.refresh_availability()
   local session = state.current()
   session_actions.refresh_availability(session, M.config)
+end
+
+--- Get normalized frame items for active or given session
+---@param opts? { all?: boolean, session?: table }
+---@return table[] items
+function M.get_frames(opts)
+  opts = opts or {}
+  local session = opts.session or state.current()
+  local picker = require("unwind.picker")
+  return picker.get_items(session, opts)
+end
+
+--- Fuzzy search / picker for call trace frames
+---@param opts? { picker?: string|function, all?: boolean }
+function M.search(opts)
+  local picker = require("unwind.picker")
+  picker.search(opts)
 end
 
 --- Show Ruby environment diagnostic info

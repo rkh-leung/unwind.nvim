@@ -9,6 +9,7 @@ local M = {}
 M._resolvers = {}
 M._ui_components = {}
 M._exporters = {}
+M._pickers = {}
 
 --- Known lifecycle event names
 M.events = {
@@ -110,8 +111,37 @@ function M.get_exporter(name)
   return M._exporters[name]
 end
 
+--- Register a custom picker
+---@param name string
+---@param picker_fn fun(items: table[], actions: table)
+function M.register_picker(name, picker_fn)
+  if type(name) ~= "string" or name == "" then
+    error("Picker name must be a non-empty string", 2)
+  end
+  if M._pickers[name] then
+    error(string.format("Picker %q already registered – use a different name or unregister first", name), 2)
+  end
+  if type(picker_fn) ~= "function" then
+    error("Picker must be a function(items, actions)", 2)
+  end
+  M._pickers[name] = picker_fn
+end
+
+--- Unregister a custom picker
+---@param name string
+function M.unregister_picker(name)
+  M._pickers[name] = nil
+end
+
+--- Get a registered picker
+---@param name string
+---@return fun(items: table[], actions: table)?
+function M.get_picker(name)
+  return M._pickers[name]
+end
+
 --- List all registered extension items
----@return { resolvers: string[], ui_components: string[], exporters: string[] }
+---@return { resolvers: string[], ui_components: string[], exporters: string[], pickers: string[] }
 function M.list()
   local function get_keys(t)
     local keys = {}
@@ -126,6 +156,7 @@ function M.list()
     resolvers = get_keys(M._resolvers),
     ui_components = get_keys(M._ui_components),
     exporters = get_keys(M._exporters),
+    pickers = get_keys(M._pickers),
   }
 end
 
@@ -134,6 +165,7 @@ function M.clear_all()
   M._resolvers = {}
   M._ui_components = {}
   M._exporters = {}
+  M._pickers = {}
 end
 
 --- Subscribe to lifecycle events (session_created, session_activated, session_changed, session_deleted)

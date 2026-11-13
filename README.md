@@ -66,15 +66,22 @@ You can start a session from scratch without having a stacktrace at all. Run `:U
 
 - **Debugging Session as Primary Abstraction**: Sessions are mutable ordered lists of source locations (`UnwindSession`). A session can start empty, grow manually, or be bootstrapped from stacktraces.
 - **Tree‑sitter Smart Location Resolution**: When adding frames with `:UnwindAdd`, Tree‑sitter resolves the enclosing function/method definition and its declaration line across languages (Lua, Python, JavaScript, TypeScript, Rust, Go, Ruby, C, C++), with graceful fallback to cursor position.
-- **Editable Call‑Path Sidebar**: The persistent right vertical split sidebar acts as an interactive call‑path editor:
+- **Editable Call‑Path Buffer & `mini.files`‑Style Synchronization**: The sidebar buffer (`unwind://sidebar`) is a dedicated modifiable buffer where every line corresponds 1:1 to a stack frame:
+  - `=`: Synchronize staged buffer edits to the session with an action diff summary and confirmation prompt.
+  - `<BS>`: Reset and discard unsynchronized buffer edits back to current session state.
   - `<CR>`: Jump to frame in source buffer.
-  - `J` / `K`: Move selected frame down/up in the call order.
+  - `o` / `O`: Insert source window's cursor location after / before the frame under cursor.
   - `a`: Add or edit frame annotation notes (indicated by `●`).
   - `e`: Replace selected frame with current source location (ideal when code moved).
-  - `d`: Delete frame from session (persists immediately if saved).
   - `s`: Save session (prompts for name).
   - `r`: Refresh file availability.
-  - `q`: Hide sidebar.
+  - `E`: Export session to Markdown.
+  - `/` or `<leader>f`: Open fuzzy finder (`unwind.search()`).
+  - `q`: Close window (prompts to sync if unsynchronized changes exist).
+  - Native Vim motions (`dd`, `p`, `yyp`, visual block moves `:m '>+1<CR>gv=gv`, `u`, `<C-r>`) operate natively without custom overrides.
+- **Pluggable Fuzzy Finder**: Search call trace frames with `:UnwindSearch` / `:UnwindFind` / `unwind.search()`, with automatic backend detection and seamless fallbacks across `fzf-lua`, `telescope`, `snacks`, `mini.pick`, and built-in `vim.ui.select`. Custom pickers can be registered with `unwind.register_picker()`.
+- **Positional Frame Addition**: Add cursor locations at precise stack positions with `:UnwindAdd <index>`, `:UnwindAddBefore`, or `:UnwindAddAfter`.
+- **Full Window Editing**: Open `unwind://sidebar` in the current main window with `:UnwindBuffer` for distraction-free navigation.
 - **Frame Annotations & Contextual Virtual Lines**: Annotate individual debugging frames with hypotheses and observations via `a` in sidebar or `:UnwindAnnotate`. Single‑line annotations are the current feature; multiline editing is a possible future enhancement, not implemented functionality. Virtual lines display neutral contextual headings (`[DEBUG PATH]` for manual steps and `[STACK FRAME]` for stacktraces) alongside inline note banners (`💬 <note>`). Annotations persist across restarts for saved sessions.
 - **Pure Lua In‑Memory Parsing**: Ingests and parses crash stacktraces in‑process via native Lua pattern matching (Raygun/.NET, Java, Rust, Node.js/V8, Python, Ruby, compiler errors, generic logs).
 - **Multi‑Tiered Path Resolvers (Ruby Gems, Bundler Git, & Stdlib)**: Automatically enriches deployed container / production traces into navigable local files:
@@ -197,6 +204,9 @@ The following table details every supported option in `require("unwind").setup(o
 | `export` | `table` | `{ fallback_context_lines = 10 }` | Configuration options for `:UnwindExport`. |
 | `keymaps` | `table|false` | See table below | Keymap table for default normal mode bindings, or `false` to disable automatic keybinding registration. |
 | `force_keymaps` | `boolean` | `false` | When `true`, overrides existing non‑Unwind keymaps during setup. By default, Unwind respects user mappings and only overrides mappings it owns. |
+| `add_position` | `"after_active" \| "before_active" \| "end"` | `"after_active"` | Default insertion position for `:UnwindAdd`. |
+| `confirm_sync` | `boolean` | `true` | When `true`, prompts with action summary before applying buffer edits on `=`. |
+| `picker` | `"auto" \| "fzf-lua" \| "telescope" \| "snacks" \| "mini.pick" \| "select" \| function` | `"auto"` | Fuzzy finder provider backend. |
 
 ### Default Keybindings
 
@@ -206,7 +216,12 @@ All leader keymaps follow single‑key mappings:
 |---|---|---|---|
 | Session Manager | `:UnwindMenu` | `<leader>w` | Open persistent session manager |
 | Ingest Clipboard | `:UnwindClipboard` | `<leader>c` | Ingest stacktrace from system clipboard into new session |
-| Add Current Location | `:UnwindAdd` | — | Add cursor location to active session |
+| Add Current Location | `:UnwindAdd [idx]` | — | Add cursor location to active session (optional positional index) |
+| Add Before Active | `:UnwindAddBefore` | — | Add cursor location immediately before active frame |
+| Add After Active | `:UnwindAddAfter` | — | Add cursor location immediately after active frame |
+| Toggle Sidebar | `:UnwindSidebar` | — | Toggle right vertical split call-trace sidebar |
+| Open Unwind Buffer | `:UnwindBuffer` | — | Open `unwind://sidebar` in current window |
+| Fuzzy Search | `:UnwindSearch` / `:UnwindFind` | — | Fuzzy search frames with configured picker |
 | Next Frame | `:UnwindNext` | `]u` | Jump to next frame |
 | Prev Frame | `:UnwindPrev` | `[u` | Jump to previous frame |
 | Next File | `:UnwindNextFile` | `]f` | Jump to next file in the session |
@@ -215,7 +230,8 @@ All leader keymaps follow single‑key mappings:
 | Quickfix Export | `:UnwindQuickfix` | — | Export all frames to the quickfix list |
 | Markdown Export | `:UnwindExport` | — | Export session to a markdown scratch buffer |
 | Annotate Frame | `:UnwindAnnotate` | `a` (sidebar) | Add or edit a single‑line note for the selected frame |
-| Delete Frame | `:UnwindDelete` | `d` (sidebar) | Remove the selected frame |
+| Sync Buffer Edits | — | `=` (sidebar) | Apply staged buffer edits to session |
+| Discard Buffer Edits| — | `<BS>` (sidebar) | Discard buffer edits back to session state |
 | Save Session | `:UnwindSave` | `s` (sidebar) | Persist the current session to disk |
 | Refresh Availability | `:UnwindRefresh` | `r` (sidebar) | Re‑check file existence on disk |
 

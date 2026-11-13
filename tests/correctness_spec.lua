@@ -144,13 +144,18 @@ do
   end
 
   assert_true(map_keys["<CR>"] or map_keys["\r"], "Enter keymap present")
-  assert_true(map_keys["d"], "d keymap present")
-  assert_true(map_keys["J"], "J keymap present")
-  assert_true(map_keys["K"], "K keymap present")
+  assert_true(map_keys["="], "= sync keymap present")
+  assert_true(map_keys["<BS>"], "<BS> reset keymap present")
+  assert_true(map_keys["o"], "o keymap present")
+  assert_true(map_keys["O"], "O keymap present")
+  assert_true(map_keys["a"], "a keymap present")
   assert_true(map_keys["e"], "e keymap present")
   assert_true(map_keys["s"], "s keymap present")
   assert_true(map_keys["r"], "r keymap present")
   assert_true(map_keys["q"], "q keymap present")
+  assert_true(not map_keys["d"], "d is left unmapped for native vim motions")
+  assert_true(not map_keys["J"], "J is unmapped in visual mode for native vim block moves")
+  assert_true(not map_keys["K"], "K is unmapped in visual mode for native vim block moves")
 
   sidebar.hide()
   unwind.clear()
