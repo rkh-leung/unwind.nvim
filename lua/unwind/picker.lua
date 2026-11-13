@@ -153,6 +153,7 @@ function M.search(opts)
 
   local unwind = require("unwind")
   local config = unwind.config or {}
+  local picker_opts = vim.tbl_deep_extend("force", config.picker_opts or {}, opts.picker_opts or {})
   local items = M.get_items(session, opts)
   if #items == 0 then
     vim.notify("Unwind: No frames available to search.", vim.log.levels.WARN)
@@ -165,14 +166,14 @@ function M.search(opts)
   local backend = opts.picker or config.picker or "auto"
 
   if type(backend) == "function" then
-    backend(items, actions)
+    backend(items, actions, picker_opts)
     return
   end
 
   -- Check registered picker in hooks
   local registered = hooks.get_picker(backend)
   if registered then
-    registered(items, actions)
+    registered(items, actions, picker_opts)
     return
   end
 
@@ -191,7 +192,7 @@ function M.search(opts)
         entry_map[it.display] = it
       end
 
-      fzf.fzf_exec(entries, {
+      local fzf_opts = vim.tbl_deep_extend("force", {
         prompt = "Unwind Trace> ",
         actions = {
           ["default"] = function(selected)
@@ -220,33 +221,33 @@ function M.search(opts)
           end,
         },
         previewer = false,
-        preview = function(selected, _opts, fzf_cb)
+        preview = function(selected)
           if not selected or not selected[1] then
-            fzf_cb(nil)
-            return
+            return {}
           end
           local it = entry_map[selected[1]]
           if not it or not it.resolved_path then
-            fzf_cb(nil)
-            return
+            return {}
           end
           local path = it.resolved_path
           local target_line = it.line or 1
           local ok_read, file_lines = pcall(vim.fn.readfile, path)
           if not ok_read or not file_lines then
-            fzf_cb(nil)
-            return
+            return {}
           end
           local context = 15
           local start_line = math.max(1, target_line - context)
           local end_line = math.min(#file_lines, target_line + context)
+          local out = {}
           for i = start_line, end_line do
             local prefix = (i == target_line) and "> " or "  "
-            fzf_cb(string.format("%s%4d %s", prefix, i, file_lines[i] or ""))
+            out[#out + 1] = string.format("%s%4d %s", prefix, i, file_lines[i] or "")
           end
-          fzf_cb(nil)
+          return out
         end,
-      })
+      }, picker_opts)
+
+      fzf.fzf_exec(entries, fzf_opts)
       return
     elseif backend == "fzf-lua" then
       vim.notify("Unwind: fzf-lua is configured but not available.", vim.log.levels.ERROR)
@@ -263,7 +264,7 @@ function M.search(opts)
     local ok_action_state, action_state = pcall(require, "telescope.actions.state")
 
     if ok_pickers and ok_finders and ok_conf and ok_actions and ok_action_state then
-      pickers.new({}, {
+      pickers.new(vim.deepcopy(picker_opts), { -- (deepcopy prevents Telescope from mutating config.picker_opts)
         prompt_title = "Unwind Call Trace",
         finder = finders.new_table({
           results = items,
@@ -310,7 +311,7 @@ function M.search(opts)
           item = it,
         })
       end
-      _G.Snacks.picker({
+      _G.Snacks.picker(vim.tbl_deep_extend("force", {
         title = "Unwind Call Trace",
         items = snacks_items,
         confirm = function(picker, sel)
@@ -319,7 +320,7 @@ function M.search(opts)
             do_jump(sel.item)
           end
         end,
-      })
+      }, picker_opts))
       return
     elseif backend == "snacks" then
       vim.notify("Unwind: snacks.picker is configured but not available.", vim.log.levels.ERROR)
@@ -341,7 +342,7 @@ function M.search(opts)
           item = it,
         })
       end
-      mini_pick.start({
+      mini_pick.start(vim.tbl_deep_extend("force", {
         source = {
           items = mini_items,
           name = "Unwind Call Trace",
@@ -352,7 +353,7 @@ function M.search(opts)
             end
           end,
         },
-      })
+      }, picker_opts))
       return
     elseif backend == "mini.pick" then
       vim.notify("Unwind: mini.pick is configured but not available.", vim.log.levels.ERROR)

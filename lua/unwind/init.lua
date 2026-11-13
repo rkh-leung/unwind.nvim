@@ -65,6 +65,7 @@ M.config = {
   add_position = "after_active",
   confirm_sync = true,
   picker = "auto",
+  picker_opts = {},
 }
 
 --- Compatibility access to installed keymaps
