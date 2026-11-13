@@ -230,6 +230,8 @@ function M.render(session, target_buf, target_win)
   if not session then
     return
   end
+  sessions.ensure_uids(session.raw_frames)
+  sessions.ensure_uids(session.frames)
   setup_highlights()
 
   local buf = target_buf or canonical_buf or M.get_or_create()
@@ -307,7 +309,7 @@ function M.update_chrome(session, win)
     return
   end
 
-  local title = session.name or "Untitled"
+  local title = (session.name or "Untitled"):gsub("%%", "%%%%")
   local filter_str = session.filter_enabled and " [filtered]" or ""
   local buf = vim.api.nvim_win_get_buf(win)
   local mod_str = (buf and vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].modified) and " [+]" or ""
@@ -319,10 +321,16 @@ function M.update_chrome(session, win)
   local frames = session.frames or {}
   if #frames > 0 and session.active_index and session.active_index > 0 and frames[session.active_index] then
     local act_frame = frames[session.active_index]
-    status_text = string.format(" %d/%d %s:%d  (= sync  <CR> open  o/O add  q close)",
-      session.active_index, #frames, act_frame.file or act_frame.path or "", act_frame.line or 1)
+    local safe_file = (act_frame.file or act_frame.path or ""):gsub("%%", "%%%%")
+    status_text = string.format(
+      " %d/%d %s:%d  = sync%%<  <CR> open  o/O add  q close%%=",
+      session.active_index,
+      #frames,
+      safe_file,
+      act_frame.line or 1
+    )
   else
-    status_text = " (= sync  <CR> open  o/O add  q close)"
+    status_text = " = sync%%<  o/O add  q close%%="
   end
   pcall(function() vim.wo[win].statusline = status_text end)
 end
@@ -386,7 +394,9 @@ end
 ---@param config table
 ---@return table[]? frames
 local function parse_manual_buffer_line(line, trimmed, session, config)
-  local parsed = parser.parse(line, { root = session.root, path_mappings = config.path_mappings })
+  local clean_line = line:gsub("^%s*%^%d+%s+", "")
+  local clean_trimmed = vim.trim(clean_line)
+  local parsed = parser.parse(clean_line, { root = session.root, path_mappings = config.path_mappings })
   if parsed and #parsed > 0 then
     for _, pf in ipairs(parsed) do
       pf.origin = "manual"
@@ -395,7 +405,7 @@ local function parse_manual_buffer_line(line, trimmed, session, config)
   end
 
   -- Simple file:line pattern fallback
-  local file_cand, line_cand = trimmed:match("^([%w_%-./\\]+%.%w+):(%d+)$")
+  local file_cand, line_cand = clean_trimmed:match("^([%w_%-./\\]+%.%w+):(%d+)$")
   if file_cand and line_cand then
     return {
       {
@@ -409,12 +419,12 @@ local function parse_manual_buffer_line(line, trimmed, session, config)
   end
 
   -- Bare file path fallback (if it exists in workspace)
-  local is_avail, resolved = navigation.check_file_availability(trimmed, session.root, config.path_mappings)
+  local is_avail, resolved = navigation.check_file_availability(clean_trimmed, session.root, config.path_mappings)
   if is_avail then
     return {
       {
-        path = trimmed,
-        file = trimmed,
+        path = clean_trimmed,
+        file = clean_trimmed,
         resolved_path = resolved,
         line = 1,
         col = 1,
@@ -437,6 +447,9 @@ function M.synchronize(buf, session, opts)
   if not buf or not vim.api.nvim_buf_is_valid(buf) or not session then
     return false
   end
+
+  sessions.ensure_uids(session.raw_frames)
+  sessions.ensure_uids(session.frames)
 
   local unwind = require("unwind")
   local config = unwind.config or {}

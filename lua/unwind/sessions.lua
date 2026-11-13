@@ -14,12 +14,8 @@ local function next_session_id()
   return string.format("sess_%d_%d", os.time(), session_id_seq)
 end
 
---- Counter for runtime frame UIDs
-local next_frame_uid = 0
-
 local function alloc_frame_uid()
-  next_frame_uid = next_frame_uid + 1
-  return next_frame_uid
+  return persistence.alloc_frame_uid()
 end
 
 --- Delegates storage path computation to persistence module (backwards-compatible)
@@ -101,6 +97,19 @@ function M.clone_frame(frame)
   cloned.raw_index = nil
   cloned.file_index = nil
   return cloned
+end
+
+--- Backfill missing runtime uids on a list of frames
+---@param frames table[]?
+function M.ensure_uids(frames)
+  if not frames then
+    return
+  end
+  for _, f in ipairs(frames) do
+    if not f.uid or f.uid == 0 then
+      f.uid = alloc_frame_uid()
+    end
+  end
 end
 
 --- Create a new session

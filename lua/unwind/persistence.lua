@@ -3,6 +3,15 @@
 
 local M = {}
 
+local next_frame_uid = 0
+
+--- Allocate a monotonic runtime frame UID
+---@return integer
+function M.alloc_frame_uid()
+  next_frame_uid = next_frame_uid + 1
+  return next_frame_uid
+end
+
 --- Compute canonical storage path for project root
 --- Directory: stdpath("state")/unwind/
 --- Filename: <sha256(normalized-project-root)>.json
@@ -130,6 +139,7 @@ local function validate_frame(f)
   end
 
   return {
+    uid = M.alloc_frame_uid(),
     path = path,
     file = file,
     line = math.floor(line),
